@@ -280,6 +280,43 @@ final class IngestService {
         return imported
     }
 
+    // MARK: - Capture entry points for the UI
+
+    // The `save*` methods above hand back the item they created, because
+    // `drainSharedInbox` needs it (to decide whether the inbox file may be
+    // deleted) and the tests assert on it. A view never wants it.
+    //
+    // Handing a `MemoryItem` to a view is not merely unnecessary, it is a
+    // hazard: `Task { await ingest.saveNote(…) }` is a single-expression
+    // closure, so Swift infers the task's `Success` type from that expression
+    // — giving `Task<MemoryItem?, Never>`, whose `Success` must be `Sendable`.
+    // SwiftData models mark their `Sendable` conformance unavailable, so the
+    // call site warns. `@discardableResult` does not help; the value is still
+    // the closure's result.
+    //
+    // These wrappers return `Void`, so the model stays inside this actor and
+    // the UI cannot re-create that shape by accident.
+
+    func capture(text: String, in context: ModelContext) async {
+        _ = await saveNote(text: text, in: context)
+    }
+
+    func capture(image: UIImage, source: String = "Photo", in context: ModelContext) async {
+        _ = await saveImage(image, source: source, in: context)
+    }
+
+    func capture(scan pages: [UIImage], in context: ModelContext) async {
+        _ = await saveScan(pages: pages, in: context)
+    }
+
+    func capture(fileAt url: URL, in context: ModelContext) async {
+        _ = await saveFile(at: url, in: context)
+    }
+
+    func capture(audioURL: URL, duration: TimeInterval, in context: ModelContext) async {
+        _ = await saveVoiceNote(audioURL: audioURL, duration: duration, in: context)
+    }
+
     // MARK: - Enrichment
 
     /// Recomputes everything search depends on. Called after every capture and

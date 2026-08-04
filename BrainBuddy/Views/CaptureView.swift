@@ -61,9 +61,7 @@ struct CaptureView: View {
                 DocumentScannerView(
                     onFinish: { pages in
                         showScanner = false
-                        Task { @MainActor in
-                            await services.ingest.saveScan(pages: pages, in: modelContext)
-                        }
+                        Task { await services.ingest.capture(scan: pages, in: modelContext) }
                     },
                     onCancel: { showScanner = false }
                 )
@@ -212,27 +210,25 @@ struct CaptureView: View {
 
     // MARK: - Actions
 
-    // Every capture task below is explicitly `@MainActor`. These helpers run
-    // from SwiftUI/UIKit callbacks that carry no isolation of their own, so an
-    // unpinned task would inherit none — and the ingest service's return value
-    // is a SwiftData model, which is deliberately not Sendable.
+    // These go through `IngestService.capture(…)` rather than `save*`: the view
+    // has no use for the created model, and the `capture` overloads return
+    // `Void` so no SwiftData model ever becomes a `Task`'s result type. This
+    // view is `@MainActor`, so the tasks inherit that isolation.
 
     private func saveDraft() {
         let text = draft
         draft = ""
         isEditorFocused = false
-        Task { @MainActor in
-            await services.ingest.saveNote(text: text, in: modelContext)
-        }
+        Task { await services.ingest.capture(text: text, in: modelContext) }
     }
 
     private func importPhotos(_ selections: [PhotosPickerItem]) {
         photoSelections = []
-        Task { @MainActor in
+        Task {
             for selection in selections {
                 guard let data = try? await selection.loadTransferable(type: Data.self),
                       let image = UIImage(data: data) else { continue }
-                await services.ingest.saveImage(image, source: "Photo", in: modelContext)
+                await services.ingest.capture(image: image, source: "Photo", in: modelContext)
             }
         }
     }
@@ -240,9 +236,9 @@ struct CaptureView: View {
     private func handleFileImport(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
-            Task { @MainActor in
+            Task {
                 for url in urls {
-                    await services.ingest.saveFile(at: url, in: modelContext)
+                    await services.ingest.capture(fileAt: url, in: modelContext)
                 }
             }
         case .failure(let error):

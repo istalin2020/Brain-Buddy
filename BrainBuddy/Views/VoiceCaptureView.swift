@@ -107,7 +107,7 @@ struct VoiceCaptureView: View {
 
         isSaving = true
         Task {
-            await services.ingest.saveVoiceNote(
+            await services.ingest.capture(
                 audioURL: result.url,
                 duration: result.duration,
                 in: modelContext
