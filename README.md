@@ -87,9 +87,9 @@ Then, before running on a device:
 
 1. Select the **BrainBuddy** target → *Signing & Capabilities*. Set your **Team**
    on both the **BrainBuddy** and **BrainBuddyShare** targets.
-2. Change the bundle identifiers from `com.brainbuddy.app` and
-   `com.brainbuddy.app.share` to something you own. The extension's identifier
-   must stay prefixed by the app's.
+2. Change the bundle identifiers to something you own. They're currently
+   `com.istalin.brainbuddy`, plus `.share` for the extension and `.tests` for the
+   test bundle — the extension's identifier must stay prefixed by the app's.
 3. Change the iCloud container to one you own. It appears in **three** places
    and all three must match:
    - `Configuration/BrainBuddy.entitlements` →
