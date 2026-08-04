@@ -15,7 +15,7 @@ Built with SwiftUI + SwiftData (CloudKit mirroring), iOS 17+.
 | Input | How it's handled |
 | --- | --- |
 | **Text** | Typed straight into the capture box. `#hashtags` become tags automatically. |
-| **Voice** | Recorded to AAC, saved immediately, then transcribed with `SFSpeechRecognizer` (on-device when available). |
+| **Voice** | Recorded to AAC, saved immediately, then transcribed with `SFSpeechRecognizer` (on-device when available). Keeps recording with the screen off, so you can capture a whole discussion. Afterwards you get the transcript, and can turn it into a saved summary. |
 | **Image** | Photo library or camera. Text is pulled out with Vision OCR so photos are searchable by their contents. |
 | **Scan** | VisionKit's document scanner — edge detection and perspective correction, then OCR per page. |
 | **PDF** | Text layer extracted with PDFKit. If the PDF is a scan with no text layer, pages are rasterized and OCR'd. |
@@ -37,6 +37,30 @@ routing is by file type, so there's no manifest or versioned schema to keep in
 sync between two binaries. Files are deleted only **after** their memory is
 saved, so an interrupted import loses nothing.
 
+### Recording a discussion
+
+Voice capture is built for the long case, not just the ten-second reminder:
+
+- **The screen can go off.** Recording continues when the phone locks or you
+  switch apps. A phone call pauses it and it resumes by itself afterwards.
+  Settings › Voice recording turns this off, and "off" means *pause* — you never
+  lose what was already captured, you just stop capturing while you're away.
+- **Long audio is transcribed in full.** `SFSpeechURLRecognitionRequest` is built
+  for utterances and gives up somewhere past a minute, so recordings are sliced
+  into 45-second segments and transcribed one at a time, with progress shown. One
+  unintelligible minute is skipped rather than losing the other thirty-nine.
+- **You see the transcript before you leave.** The recording is saved *first* —
+  a crash or a failed transcription can never cost you the audio — and then the
+  transcript appears with a **Create summary** button.
+- **Summaries are extractive and opt-in.** Key points and follow-ups (anything
+  somebody committed to: *have to*, *will*, *let's*, *priority*) are pulled out as
+  verbatim sentences. Nothing is generated, so a summary can't invent a decision
+  nobody made. It is a draft until you press **Save**, and saving indexes it — so
+  a two-hour meeting becomes findable by the three things that mattered in it.
+
+Any long memory can be summarized later, too: open it and the Summary section is
+there, including for OCR'd scans and imported PDFs.
+
 ### Search (typed or spoken)
 
 The **Ask** tab is a hybrid retriever:
@@ -53,8 +77,19 @@ dentist?"* searches for `dentist`.
 
 Tap the microphone and the same pipeline runs on live dictation. The composed
 answer is **extractive** — it quotes what you actually stored, with a "from your
-note yesterday…" preamble — and `AVSpeechSynthesizer` reads it aloud. It never
-generates prose, so it can't tell you something your notes don't say.
+note yesterday…" preamble. It never generates prose, so it can't tell you
+something your notes don't say.
+
+**Answers are silent.** They appear as text, and a **Read aloud** button hands
+that text to `AVSpeechSynthesizer` when *you* ask for it. An app that starts
+talking the moment you look something up is unusable in a meeting, on a train, or
+next to someone asleep. Settings can flip it back to speaking automatically.
+
+Asking also empties the question box, so the next question doesn't need the last
+one cleared out by hand — the question you asked stays on screen above the answer.
+That makes search explicit (press return, tap the mic, tap a suggestion) rather
+than debounced on every keystroke; a box that clears itself can't also be
+searched as you type it.
 
 ### iCloud sync
 
@@ -119,8 +154,9 @@ xcodebuild test -scheme BrainBuddy -destination 'platform=iOS Simulator,name=iPh
 The suite covers the parts worth pinning down: tokenizer normalization and
 stemming, BM25 scoring and IDF non-negativity, vector math and the embedding
 blob round-trip, hybrid ranking behavior, answer phrasing, link-vs-note
-detection and link titling, and a SwiftData schema smoke test (in-memory, no
-iCloud).
+detection and link titling, summarizer behavior (including the property that
+matters most — every summary line is quoted verbatim from the transcript), and a
+SwiftData schema smoke test (in-memory, no iCloud).
 
 ---
 
@@ -134,7 +170,7 @@ BrainBuddy/
                 SearchEngine (hybrid ranking), AnswerComposer
   Services/     IngestService (the one capture path), TextAnalysis, TextRecognizer,
                 PDFTextExtractor, AudioRecorder, SpeechTranscriber, SpeechSpeaker,
-                AudioPlayerController, CloudSyncMonitor
+                DiscussionSummarizer, AudioPlayerController, CloudSyncMonitor
   Services/     … SharedInbox (App Group hand-off from the extension)
   Views/        RootView, CaptureView, VoiceCaptureView, LibraryView,
                 MemoryDetailView, AskView, SettingsView, Components/
@@ -165,6 +201,14 @@ search behavior testable without a device or a container.
 - **Shared items import when you next open the app**, not at share time — that's
   the deliberate consequence of keeping OCR and embedding out of the extension.
   Settings › Sharing shows anything still waiting.
+- **Segment boundaries can clip a word.** Long recordings are split every 45
+  seconds with no overlap, so a word straddling a boundary may lose a syllable.
+  Overlapping the slices would duplicate whole phrases instead, which reads worse.
+- **Summaries have no speaker labels.** `SFSpeechRecognizer` doesn't diarize, so a
+  two-person discussion transcribes as one voice. Key points and follow-ups are
+  quoted correctly; who said them isn't recorded.
+- **Background recording needs the app to have been foregrounded to start.** iOS
+  won't let a suspended app begin recording — start it, then lock the screen.
 - **The app icon is a generated placeholder.** Replace
   `BrainBuddy/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`
   before shipping.

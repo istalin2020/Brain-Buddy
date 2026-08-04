@@ -56,6 +56,14 @@ final class MemoryItem {
     /// Text machine-extracted from attachments (OCR, PDF text layer).
     var extractedText: String = ""
 
+    /// A summary the user asked for and saved — key points and follow-ups pulled
+    /// out of a long transcript. Empty until they press Save on one, because an
+    /// unsaved summary is a suggestion, not a fact about the memory.
+    ///
+    /// Added after the first release. CloudKit mirroring accepts new attributes
+    /// that carry a default value, so existing records simply read back "".
+    var summary: String = ""
+
     var kindRaw: String = MemoryKind.note.rawValue
 
     var createdAt: Date = Date()
@@ -116,9 +124,14 @@ extension MemoryItem {
         keywordIndex.split(separator: " ").map(String.init)
     }
 
+    var hasSummary: Bool {
+        !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// Everything a search should look at, in one string.
     var searchableText: String {
         var parts = [title, text]
+        if !summary.isEmpty { parts.append(summary) }
         if !extractedText.isEmpty { parts.append(extractedText) }
         if !source.isEmpty { parts.append(source) }
         let names = tagNames

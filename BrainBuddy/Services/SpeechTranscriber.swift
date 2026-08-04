@@ -13,6 +13,7 @@ final class SpeechTranscriber {
         case notAuthorized
         case recognizerUnavailable
         case engineFailure(String)
+        case transcriptionFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -22,6 +23,8 @@ final class SpeechTranscriber {
                 return "Speech recognition isn't available for this language right now."
             case .engineFailure(let reason):
                 return "Couldn't listen: \(reason)"
+            case .transcriptionFailed(let reason):
+                return "Couldn't transcribe the recording: \(reason)"
             }
         }
     }
@@ -195,16 +198,141 @@ final class SpeechTranscriber {
 
     // MARK: - File transcription
 
+    /// Longest slice handed to the recognizer in one request.
+    ///
+    /// `SFSpeechURLRecognitionRequest` is built for utterances, not hour-long
+    /// conversations: past roughly a minute it starts returning a truncated
+    /// result or nothing at all. Splitting the audio is what lets a recorded
+    /// discussion be transcribed in full rather than for its first minute.
+    static let segmentLength: TimeInterval = 45
+
     /// Transcribes a finished recording. Used right after a voice note is saved
     /// so the note is searchable by its words, not just its date.
-    static func transcribe(fileAt url: URL) async throws -> String {
+    ///
+    /// - Parameters:
+    ///   - duration: known length in seconds; read from the file when omitted.
+    ///   - progress: called with `(completed, total)` segments for long
+    ///     recordings, so the UI can say something better than "Transcribing…"
+    ///     for several minutes.
+    static func transcribe(
+        fileAt url: URL,
+        duration: TimeInterval = 0,
+        progress: ((Int, Int) -> Void)? = nil
+    ) async throws -> String {
         guard await requestAuthorization() else { throw TranscriberError.notAuthorized }
-        let recognizer = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-        guard let recognizer, recognizer.isAvailable else { throw TranscriberError.recognizerUnavailable }
+        let recognizer = try makeRecognizer()
 
+        let asset = AVURLAsset(url: url)
+        let length = duration > 0
+            ? duration
+            : ((try? await asset.load(.duration))?.seconds ?? 0)
+
+        // The overwhelming majority of voice notes are short; those go straight
+        // through in one request, exactly as before.
+        guard length > segmentLength * 1.25 else {
+            progress?(0, 1)
+            let text = try await recognize(fileAt: url, using: recognizer)
+            progress?(1, 1)
+            return text
+        }
+
+        return try await transcribeInSegments(
+            asset: asset,
+            length: length,
+            recognizer: recognizer,
+            progress: progress
+        )
+    }
+
+    /// Walks a long recording in `segmentLength` slices, exporting each to a
+    /// temporary file and transcribing it.
+    ///
+    /// A failed slice is skipped rather than fatal: one unintelligible minute in
+    /// the middle of a meeting must not cost the other thirty-nine.
+    private static func transcribeInSegments(
+        asset: AVURLAsset,
+        length: TimeInterval,
+        recognizer: SFSpeechRecognizer,
+        progress: ((Int, Int) -> Void)?
+    ) async throws -> String {
+        let total = max(1, Int((length / segmentLength).rounded(.up)))
+        var pieces: [String] = []
+        var failures: [String] = []
+
+        for index in 0..<total {
+            progress?(index, total)
+            let start = Double(index) * segmentLength
+            let span = min(segmentLength, length - start)
+            guard span > 0.5 else { break }
+
+            let range = CMTimeRange(
+                start: CMTime(seconds: start, preferredTimescale: 600),
+                duration: CMTime(seconds: span, preferredTimescale: 600)
+            )
+
+            do {
+                let segmentURL = try await exportSegment(of: asset, range: range)
+                defer { try? FileManager.default.removeItem(at: segmentURL) }
+                let piece = try await recognize(fileAt: segmentURL, using: recognizer)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !piece.isEmpty { pieces.append(piece) }
+            } catch {
+                failures.append(error.localizedDescription)
+            }
+        }
+        progress?(total, total)
+
+        guard !pieces.isEmpty else {
+            throw TranscriberError.transcriptionFailed(
+                failures.first ?? "no speech was recognized in it"
+            )
+        }
+        return pieces.joined(separator: " ")
+    }
+
+    /// Copies one time range out to its own m4a file for the recognizer to read.
+    private static func exportSegment(of asset: AVURLAsset, range: CMTimeRange) async throws -> URL {
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+            throw TranscriberError.transcriptionFailed("this recording can't be split")
+        }
+        let output = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bb-segment-\(UUID().uuidString).m4a")
+        session.timeRange = range
+
+        if #available(iOS 18.0, *) {
+            try await session.export(to: output, as: .m4a)
+            return output
+        }
+
+        // `exportAsynchronously` is deprecated in iOS 18, which is why the modern
+        // call above is preferred when it exists.
+        session.outputURL = output
+        session.outputFileType = .m4a
+        await withCheckedContinuation { continuation in
+            session.exportAsynchronously { continuation.resume() }
+        }
+        guard session.status == .completed else {
+            throw TranscriberError.transcriptionFailed(
+                session.error?.localizedDescription ?? "a piece of the recording couldn't be read"
+            )
+        }
+        return output
+    }
+
+    private static func makeRecognizer() throws -> SFSpeechRecognizer {
+        let recognizer = SFSpeechRecognizer(locale: Locale.current)
+            ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+        guard let recognizer, recognizer.isAvailable else { throw TranscriberError.recognizerUnavailable }
+        return recognizer
+    }
+
+    private static func recognize(fileAt url: URL, using recognizer: SFSpeechRecognizer) async throws -> String {
         let request = SFSpeechURLRecognitionRequest(url: url)
         request.shouldReportPartialResults = false
         request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
+        // Punctuation is what makes a long transcript readable — and it's what
+        // lets the summarizer find sentence boundaries at all.
+        request.addsPunctuation = true
 
         return try await withCheckedThrowingContinuation { continuation in
             // `recognitionTask` can call back more than once; make sure the

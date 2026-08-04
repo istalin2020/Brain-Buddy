@@ -15,10 +15,14 @@ struct MemoryDetailView: View {
     @State private var newTag = ""
     @State private var showExtractedText = false
     @State private var pdfPreview: MemoryAttachment?
+    @State private var draftSummary: DiscussionSummarizer.Summary?
+    @State private var isSummarizing = false
+    @State private var summaryNotice: String?
 
     var body: some View {
         List {
             titleSection
+            summarySection
             if !item.sortedAttachments.isEmpty { attachmentSection }
             if !item.extractedText.isEmpty { extractedSection }
             tagSection
@@ -80,6 +84,58 @@ struct MemoryDetailView: View {
                     Text(item.text)
                         .textSelection(.enabled)
                 }
+            }
+        }
+    }
+
+    /// Only appears when there is something to summarize, or a summary already
+    /// saved — a two-line note has no business showing a Summary heading.
+    @ViewBuilder
+    private var summarySection: some View {
+        if item.hasSummary || canSummarize {
+            Section {
+                if let draftSummary {
+                    SummaryBody(summary: draftSummary)
+                    Button {
+                        save(draftSummary)
+                    } label: {
+                        Label("Save summary", systemImage: "tray.and.arrow.down")
+                    }
+                    Button("Discard draft") { self.draftSummary = nil }
+                } else {
+                    if item.hasSummary {
+                        Text(item.summary)
+                            .font(.callout)
+                            .textSelection(.enabled)
+                    }
+                    if canSummarize {
+                        Button {
+                            makeSummary()
+                        } label: {
+                            if isSummarizing {
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                    Text("Summarizing…")
+                                }
+                            } else {
+                                Label(
+                                    item.hasSummary ? "Summarize again" : "Create summary",
+                                    systemImage: "list.bullet.rectangle"
+                                )
+                            }
+                        }
+                        .disabled(isSummarizing)
+                    }
+                }
+                if let summaryNotice {
+                    Text(summaryNotice)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Summary")
+            } footer: {
+                Text("Every line is quoted from this memory's own words — nothing is generated. A saved summary is searchable, so you can find a long recording by the few things that mattered in it.")
             }
         }
     }
@@ -185,6 +241,45 @@ struct MemoryDetailView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Summarizing
+
+    /// A transcript, but also a long OCR'd scan or an imported PDF — anything
+    /// with enough words in it to be worth condensing.
+    private var summarizableText: String {
+        item.text.isEmpty ? item.extractedText : item.text
+    }
+
+    private var canSummarize: Bool {
+        summarizableText
+            .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+            .count >= DiscussionSummarizer.minimumWords
+    }
+
+    private func makeSummary() {
+        guard !isSummarizing else { return }
+        let body = summarizableText
+        isSummarizing = true
+        summaryNotice = nil
+        Task {
+            // Two `NLTagger` passes over a long document; keep it off the main actor.
+            let result = await Task.detached(priority: .userInitiated) {
+                DiscussionSummarizer.summarize(body)
+            }.value
+            isSummarizing = false
+            if let result {
+                draftSummary = result
+            } else {
+                summaryNotice = "There isn't enough distinct material here to summarize."
+            }
+        }
+    }
+
+    private func save(_ summary: DiscussionSummarizer.Summary) {
+        let text = summary.text
+        draftSummary = nil
+        Task { await services.ingest.setSummary(text, on: item, in: modelContext) }
     }
 
     // MARK: - Actions

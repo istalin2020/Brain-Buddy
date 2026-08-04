@@ -7,6 +7,7 @@ enum PreferenceKey {
     static let speakAnswers = "settings.speakAnswers"
     static let semanticSearch = "settings.semanticSearch"
     static let autoStopDictation = "settings.autoStopDictation"
+    static let backgroundRecording = "settings.backgroundRecording"
 }
 
 /// The long-lived objects the whole app shares. Injected once at the root so
@@ -24,9 +25,14 @@ final class AppServices {
     init() {
         let defaults = UserDefaults.standard
         defaults.register(defaults: [
-            PreferenceKey.speakAnswers: true,
+            // Answers are silent unless you ask for sound. A second brain that
+            // starts talking the moment you look something up is unusable in a
+            // meeting, on a train, or next to someone who is asleep — so
+            // speaking is a button you press, not something that happens to you.
+            PreferenceKey.speakAnswers: false,
             PreferenceKey.semanticSearch: true,
-            PreferenceKey.autoStopDictation: true
+            PreferenceKey.autoStopDictation: true,
+            PreferenceKey.backgroundRecording: true
         ])
         applyPreferences()
     }
@@ -36,10 +42,7 @@ final class AppServices {
         let defaults = UserDefaults.standard
         search.isSemanticEnabled = defaults.bool(forKey: PreferenceKey.semanticSearch)
         transcriber.autoStopAfterSilence = defaults.bool(forKey: PreferenceKey.autoStopDictation) ? 2.5 : nil
-    }
-
-    var shouldSpeakAnswers: Bool {
-        UserDefaults.standard.bool(forKey: PreferenceKey.speakAnswers)
+        recorder.allowsBackgroundRecording = defaults.bool(forKey: PreferenceKey.backgroundRecording)
     }
 
     /// Warms the embedding model so the first search isn't the slow one.

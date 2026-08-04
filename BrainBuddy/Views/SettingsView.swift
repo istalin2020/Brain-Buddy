@@ -9,9 +9,10 @@ struct SettingsView: View {
     @Query private var allMemories: [MemoryItem]
     @Query private var allAttachments: [MemoryAttachment]
 
-    @AppStorage(PreferenceKey.speakAnswers) private var speakAnswers = true
+    @AppStorage(PreferenceKey.speakAnswers) private var speakAnswers = false
     @AppStorage(PreferenceKey.semanticSearch) private var semanticSearch = true
     @AppStorage(PreferenceKey.autoStopDictation) private var autoStopDictation = true
+    @AppStorage(PreferenceKey.backgroundRecording) private var backgroundRecording = true
 
     @State private var reindexProgress: Double?
     @State private var pendingSharedItems = 0
@@ -21,6 +22,7 @@ struct SettingsView: View {
             List {
                 syncSection
                 searchSection
+                recordingSection
                 sharingSection
                 storageSection
                 maintenanceSection
@@ -33,6 +35,7 @@ struct SettingsView: View {
             }
             .onChange(of: semanticSearch) { _, _ in services.applyPreferences() }
             .onChange(of: autoStopDictation) { _, _ in services.applyPreferences() }
+            .onChange(of: backgroundRecording) { _, _ in services.applyPreferences() }
         }
     }
 
@@ -76,15 +79,30 @@ struct SettingsView: View {
 
     private var searchSection: some View {
         Section {
-            Toggle("Speak answers aloud", isOn: $speakAnswers)
+            Toggle("Read answers aloud automatically", isOn: $speakAnswers)
             Toggle("Match by meaning", isOn: $semanticSearch)
             Toggle("Stop listening after a pause", isOn: $autoStopDictation)
         } header: {
             Text("Search & voice")
         } footer: {
-            Text(semanticSearch
-                 ? "Meaning matching uses Apple's on-device language models, so questions work even when you don't remember your exact words. Nothing is sent anywhere."
-                 : "Only keyword matching is used. Faster on very large libraries, but you'll need to recall the wording you saved.")
+            Text(speakAnswers
+                 ? "Answers are spoken as soon as they appear. Every answer also has a Read aloud button, so you can leave this off and choose per answer."
+                 : "Answers stay silent. Tap Read aloud on an answer when you want to hear it.\n\n"
+                   + (semanticSearch
+                      ? "Meaning matching uses Apple's on-device language models, so questions work even when you don't remember your exact words. Nothing is sent anywhere."
+                      : "Only keyword matching is used. Faster on very large libraries, but you'll need to recall the wording you saved."))
+        }
+    }
+
+    private var recordingSection: some View {
+        Section {
+            Toggle("Keep recording in the background", isOn: $backgroundRecording)
+        } header: {
+            Text("Voice recording")
+        } footer: {
+            Text(backgroundRecording
+                 ? "Recording continues when the screen locks or you switch apps, so you can capture a long discussion without keeping Brain Buddy open. A phone call pauses it and it resumes afterwards."
+                 : "Recording pauses when you leave the app and waits for you to come back. Nothing already recorded is lost — but nothing is captured while you're away.")
         }
     }
 

@@ -1,9 +1,15 @@
 import AVFoundation
 import Foundation
 import Observation
+import UIKit
 
 /// Records voice notes to a temporary AAC file and publishes a live level meter
 /// for the waveform in the capture UI.
+///
+/// Built for the long case as well as the short one: a ten-second reminder to
+/// yourself and a forty-minute conversation between two other people go through
+/// the same path. That means surviving the screen locking, the app being
+/// backgrounded, and a phone call arriving in the middle.
 @MainActor
 @Observable
 final class AudioRecorder {
@@ -26,9 +32,24 @@ final class AudioRecorder {
     /// Rolling window of normalized levels (0...1) for the waveform view.
     private(set) var levels: [Double] = []
 
+    /// Set when recording is suspended but the file is still open, with a
+    /// sentence explaining why — a paused recorder that looks identical to a
+    /// running one is how people lose an hour of audio.
+    private(set) var pauseReason: String?
+    var isPaused: Bool { pauseReason != nil }
+
+    /// Whether recording continues once the app is no longer on screen — the
+    /// screen locking, or you switching to another app.
+    ///
+    /// Mirrored from Settings. When this is off, leaving the app *pauses* rather
+    /// than stops: no audio is captured while you're away, which is the honest
+    /// meaning of "off", but what you already recorded is never thrown away.
+    var allowsBackgroundRecording = true
+
     private var recorder: AVAudioRecorder?
     private var meterTask: Task<Void, Never>?
     private var fileURL: URL?
+    private var observers: [any NSObjectProtocol] = []
 
     private let maximumLevelSamples = 48
 
@@ -84,7 +105,7 @@ final class AudioRecorder {
             .appendingPathComponent("voice-\(UUID().uuidString).m4a")
 
         // Mono AAC at 44.1 kHz: speech-quality, small enough that a long note
-        // still syncs to iCloud quickly.
+        // still syncs to iCloud quickly. An hour lands around 28 MB.
         let settings: [String: Any] = [
             AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
             AVSampleRateKey: 44_100.0,
@@ -108,8 +129,10 @@ final class AudioRecorder {
         }
 
         isRecording = true
+        pauseReason = nil
         duration = 0
         levels = []
+        startObserving()
         startMetering()
     }
 
@@ -117,13 +140,17 @@ final class AudioRecorder {
     @discardableResult
     func stop() -> (url: URL, duration: TimeInterval)? {
         guard let recorder, let fileURL else { return nil }
-        let length = recorder.currentTime
+        // A paused recorder reports `currentTime` as 0, so trust the length we
+        // banked at pause time instead.
+        let length = isPaused ? duration : recorder.currentTime
         recorder.stop()
         stopMetering()
+        stopObserving()
 
         self.recorder = nil
         self.fileURL = nil
         isRecording = false
+        pauseReason = nil
         duration = length
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -135,15 +162,109 @@ final class AudioRecorder {
         guard let recorder, let fileURL else { return }
         recorder.stop()
         stopMetering()
+        stopObserving()
         try? FileManager.default.removeItem(at: fileURL)
 
         self.recorder = nil
         self.fileURL = nil
         isRecording = false
+        pauseReason = nil
         duration = 0
         levels = []
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    // MARK: - Pause / resume
+
+    /// Suspends capture without closing the file. `reason` is shown to the user.
+    func pause(reason: String) {
+        guard let recorder, isRecording, !isPaused else { return }
+        duration = recorder.currentTime
+        recorder.pause()
+        pauseReason = reason
+    }
+
+    /// Resumes a paused recording, reactivating the session if an interruption
+    /// took it away. Returns `false` when the microphone couldn't be reclaimed.
+    @discardableResult
+    func resume() -> Bool {
+        guard let recorder, isRecording, isPaused else { return false }
+        do {
+            try AVAudioSession.sharedInstance().setActive(true, options: [])
+        } catch {
+            pauseReason = "Couldn't get the microphone back: \(error.localizedDescription)"
+            return false
+        }
+        guard recorder.record() else {
+            pauseReason = "Couldn't restart the recording. Stop to keep what you have."
+            return false
+        }
+        pauseReason = nil
+        return true
+    }
+
+    // MARK: - Interruptions and lifecycle
+
+    /// Two things take a long recording away: another app claiming the microphone
+    /// (a phone call), and this app leaving the screen when the user has asked us
+    /// not to record in the background. Both are handled by pausing — never by
+    /// discarding what was already captured.
+    private func startObserving() {
+        stopObserving()
+        let center = NotificationCenter.default
+
+        observers.append(center.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            // Unpack the payload here, on the main queue, so the isolated
+            // handler below is handed nothing but plain values.
+            let type = (notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
+                .flatMap(AVAudioSession.InterruptionType.init(rawValue:))
+            let shouldResume = (notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt)
+                .map { AVAudioSession.InterruptionOptions(rawValue: $0).contains(.shouldResume) } ?? false
+
+            // `queue: .main` is why asserting main-actor isolation here is true
+            // rather than hopeful.
+            MainActor.assumeIsolated {
+                self?.handleInterruption(type: type, shouldResume: shouldResume)
+            }
+        })
+
+        observers.append(center.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.allowsBackgroundRecording else { return }
+                self.pause(reason: "Paused when you left the app — background recording is off in Settings.")
+            }
+        })
+    }
+
+    private func stopObserving() {
+        for observer in observers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        observers = []
+    }
+
+    private func handleInterruption(type: AVAudioSession.InterruptionType?, shouldResume: Bool) {
+        switch type {
+        case .began:
+            pause(reason: "Paused — something else is using the microphone.")
+        case .ended:
+            // Only auto-resume what an interruption paused. A recording paused
+            // because the user left the app stays paused until they come back
+            // and say so.
+            guard shouldResume, isPaused, allowsBackgroundRecording else { return }
+            resume()
+        default:
+            break
+        }
     }
 
     // MARK: - Metering
@@ -154,6 +275,7 @@ final class AudioRecorder {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 60_000_000)
                 guard let self, let recorder = self.recorder else { return }
+                guard !self.isPaused else { continue }
                 recorder.updateMeters()
                 self.duration = recorder.currentTime
                 self.append(level: Self.normalize(decibels: recorder.averagePower(forChannel: 0)))

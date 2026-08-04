@@ -82,7 +82,15 @@ final class IngestService {
 
         activity = "Transcribing"
         do {
-            let transcript = try await SpeechTranscriber.transcribe(fileAt: audioURL)
+            let transcript = try await SpeechTranscriber.transcribe(
+                fileAt: audioURL,
+                duration: duration
+            ) { [weak self] done, total in
+                // A forty-minute recording takes a while; "Transcribing" alone
+                // for several minutes looks identical to being stuck.
+                guard total > 1 else { return }
+                self?.activity = "Transcribing part \(min(done + 1, total)) of \(total)"
+            }
             let clean = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
             if !clean.isEmpty {
                 item.text = clean
@@ -294,8 +302,10 @@ final class IngestService {
     // call site warns. `@discardableResult` does not help; the value is still
     // the closure's result.
     //
-    // These wrappers return `Void`, so the model stays inside this actor and
-    // the UI cannot re-create that shape by accident.
+    // These wrappers return `Void`, so the model never becomes a task's result
+    // type. `VoiceCaptureView` is the one view that legitimately needs the item
+    // back — it shows you the transcript afterwards — and it assigns the result
+    // to state inside a multi-statement task, which is not the hazardous shape.
 
     func capture(text: String, in context: ModelContext) async {
         _ = await saveNote(text: text, in: context)
@@ -311,10 +321,6 @@ final class IngestService {
 
     func capture(fileAt url: URL, in context: ModelContext) async {
         _ = await saveFile(at: url, in: context)
-    }
-
-    func capture(audioURL: URL, duration: TimeInterval, in context: ModelContext) async {
-        _ = await saveVoiceNote(audioURL: audioURL, duration: duration, in: context)
     }
 
     // MARK: - Enrichment
@@ -357,6 +363,16 @@ final class IngestService {
     }
 
     // MARK: - Editing
+
+    /// Stores a summary the user reviewed and pressed Save on.
+    ///
+    /// Re-indexes afterwards, because the summary is searchable text: the point
+    /// of summarizing a two-hour meeting is being able to find it by the three
+    /// things that mattered in it.
+    func setSummary(_ summary: String, on item: MemoryItem, in context: ModelContext) async {
+        item.summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        await finalize(item, in: context, activity: "Saving summary")
+    }
 
     func setTags(_ names: [String], on item: MemoryItem, in context: ModelContext) {
         item.tags = []
