@@ -61,7 +61,9 @@ struct CaptureView: View {
                 DocumentScannerView(
                     onFinish: { pages in
                         showScanner = false
-                        Task { await services.ingest.saveScan(pages: pages, in: modelContext) }
+                        Task { @MainActor in
+                            await services.ingest.saveScan(pages: pages, in: modelContext)
+                        }
                     },
                     onCancel: { showScanner = false }
                 )
@@ -210,16 +212,23 @@ struct CaptureView: View {
 
     // MARK: - Actions
 
+    // Every capture task below is explicitly `@MainActor`. These helpers run
+    // from SwiftUI/UIKit callbacks that carry no isolation of their own, so an
+    // unpinned task would inherit none — and the ingest service's return value
+    // is a SwiftData model, which is deliberately not Sendable.
+
     private func saveDraft() {
         let text = draft
         draft = ""
         isEditorFocused = false
-        Task { await services.ingest.saveNote(text: text, in: modelContext) }
+        Task { @MainActor in
+            await services.ingest.saveNote(text: text, in: modelContext)
+        }
     }
 
     private func importPhotos(_ selections: [PhotosPickerItem]) {
         photoSelections = []
-        Task {
+        Task { @MainActor in
             for selection in selections {
                 guard let data = try? await selection.loadTransferable(type: Data.self),
                       let image = UIImage(data: data) else { continue }
@@ -231,7 +240,7 @@ struct CaptureView: View {
     private func handleFileImport(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
-            Task {
+            Task { @MainActor in
                 for url in urls {
                     await services.ingest.saveFile(at: url, in: modelContext)
                 }

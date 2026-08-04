@@ -32,6 +32,23 @@ final class AudioRecorder {
 
     private let maximumLevelSamples = 48
 
+    // MARK: - Session configuration
+
+    /// Recording route options.
+    ///
+    /// `allowBluetooth` was renamed to `allowBluetoothHFP`; the old spelling is
+    /// deprecated. Below iOS 26 we simply don't opt into Bluetooth capture, so
+    /// a paired headset records through the built-in mic instead of HFP. That
+    /// matches what the dictation path in `SpeechTranscriber` already does, and
+    /// it costs headset quality on older systems rather than costing a
+    /// recording — which is the trade worth making here.
+    private static var categoryOptions: AVAudioSession.CategoryOptions {
+        if #available(iOS 26.0, *) {
+            return [.defaultToSpeaker, .allowBluetoothHFP]
+        }
+        return [.defaultToSpeaker]
+    }
+
     // MARK: - Permission
 
     static func requestPermission() async -> Bool {
@@ -57,7 +74,7 @@ final class AudioRecorder {
 
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            try session.setCategory(.playAndRecord, mode: .default, options: Self.categoryOptions)
             try session.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
             throw RecorderError.sessionUnavailable(error.localizedDescription)
