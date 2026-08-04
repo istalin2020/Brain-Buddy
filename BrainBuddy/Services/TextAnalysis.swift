@@ -90,6 +90,41 @@ enum TextAnalysis {
             .map(\.key)
     }
 
+    /// Returns the URL when `text` is *nothing but* a single link.
+    ///
+    /// This is the shape of a share-sheet URL or a pasted address, and it earns
+    /// its own memory kind. A URL sitting inside a sentence does not — that's a
+    /// note that happens to contain a link.
+    static func bareURL(in text: String) -> URL? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else { return nil }
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return nil }
+
+        let whole = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
+        guard let match = detector.firstMatch(in: trimmed, options: [], range: whole),
+              match.range == whole,
+              let url = match.url,
+              url.scheme?.hasPrefix("http") == true else { return nil }
+        return url
+    }
+
+    /// A readable title for a link: the host, plus the last path component when
+    /// it looks like a slug rather than an ID.
+    static func linkTitle(for url: URL) -> String {
+        let host = (url.host ?? url.absoluteString).replacingOccurrences(of: "www.", with: "")
+        let slug = url.pathComponents
+            .filter { $0 != "/" && !$0.isEmpty }
+            .last?
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+            .removingPercentEncoding
+
+        guard let slug, slug.count > 2, slug.count <= 60, slug.rangeOfCharacter(from: .letters) != nil else {
+            return host
+        }
+        return "\(host) — \(slug)"
+    }
+
     /// Pulls `#hashtags` out of typed text so tagging costs no extra taps.
     static func hashtags(in text: String) -> [String] {
         var found: [String] = []

@@ -1,8 +1,12 @@
+import SwiftData
 import SwiftUI
 
 @MainActor
 struct RootView: View {
     @Environment(AppServices.self) private var services
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
+
     @State private var selection: Tab = .capture
 
     enum Tab: Hashable {
@@ -33,6 +37,14 @@ struct RootView: View {
                 services.speaker.stop()
                 services.transcriber.cancelListening()
             }
+        }
+        // Anything shared from another app lands in the App Group inbox; import
+        // it on launch and on every return to the foreground, which is when a
+        // share sheet hand-off typically completes.
+        .task { await services.ingest.drainSharedInbox(into: modelContext) }
+        .onChange(of: scenePhase) { _, newValue in
+            guard newValue == .active else { return }
+            Task { await services.ingest.drainSharedInbox(into: modelContext) }
         }
     }
 }

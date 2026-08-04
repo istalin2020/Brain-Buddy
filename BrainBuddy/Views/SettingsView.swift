@@ -14,18 +14,23 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.autoStopDictation) private var autoStopDictation = true
 
     @State private var reindexProgress: Double?
+    @State private var pendingSharedItems = 0
 
     var body: some View {
         NavigationStack {
             List {
                 syncSection
                 searchSection
+                sharingSection
                 storageSection
                 maintenanceSection
                 aboutSection
             }
             .navigationTitle("Settings")
-            .task { await services.syncMonitor.refresh() }
+            .task {
+                pendingSharedItems = SharedInbox.pendingFiles().count
+                await services.syncMonitor.refresh()
+            }
             .onChange(of: semanticSearch) { _, _ in services.applyPreferences() }
             .onChange(of: autoStopDictation) { _, _ in services.applyPreferences() }
         }
@@ -84,12 +89,35 @@ struct SettingsView: View {
     }
 
     private var storageSection: some View {
-        Section("Your brain") {
+        Section {
             LabeledContent("Memories", value: "\(allMemories.filter { !$0.isTrashed }.count)")
             LabeledContent("In trash", value: "\(allMemories.filter(\.isTrashed).count)")
             LabeledContent("Attachments", value: "\(allAttachments.count)")
             LabeledContent("Attachment size", value: formattedAttachmentSize)
             LabeledContent("Indexed for meaning", value: "\(allMemories.filter { $0.embeddingData != nil }.count)")
+        } header: {
+            Text("Your brain")
+        }
+    }
+
+    private var sharingSection: some View {
+        Section {
+            LabeledContent(
+                "Share sheet",
+                value: SharedInbox.isAvailable ? "Ready" : "App Group not configured"
+            )
+            if pendingSharedItems > 0 {
+                LabeledContent("Waiting to import", value: "\(pendingSharedItems)")
+                Button("Import now") {
+                    Task { await services.ingest.drainSharedInbox(into: modelContext) }
+                }
+            }
+        } header: {
+            Text("Sharing")
+        } footer: {
+            Text(SharedInbox.isAvailable
+                 ? "Share a link, photo, PDF or selection from any app and pick Brain Buddy. Items are imported — and text-recognized — the next time you open the app."
+                 : "The share extension needs the App Group group.com.brainbuddy.app enabled on both targets. Until then, sharing from other apps won't reach your brain.")
         }
     }
 

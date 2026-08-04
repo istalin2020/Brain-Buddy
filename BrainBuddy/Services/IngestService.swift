@@ -29,9 +29,26 @@ final class IngestService {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
+        // A capture that is only a URL is a link, not a note — it gets a
+        // readable title instead of showing the raw address as its own name.
+        if let url = TextAnalysis.bareURL(in: trimmed) {
+            return await saveLink(url, in: context)
+        }
+
         let item = MemoryItem(text: trimmed, kind: .note)
         context.insert(item)
         await finalize(item, in: context, activity: "Saving note")
+        return item
+    }
+
+    // MARK: - Links
+
+    @discardableResult
+    func saveLink(_ url: URL, in context: ModelContext) async -> MemoryItem? {
+        let item = MemoryItem(text: url.absoluteString, kind: .link, source: url.absoluteString)
+        item.title = TextAnalysis.linkTitle(for: url)
+        context.insert(item)
+        await finalize(item, in: context, activity: "Saving link", fallbackTitle: url.absoluteString)
         return item
     }
 
@@ -221,6 +238,46 @@ final class IngestService {
 
         await finalize(item, in: context, activity: "Indexing", fallbackTitle: filename)
         return item
+    }
+
+    // MARK: - Share extension hand-off
+
+    /// Imports everything the share extension left in the App Group folder.
+    ///
+    /// A file is only deleted after its memory is saved, so a crash or a kill
+    /// mid-import loses nothing — the item is simply picked up next launch. The
+    /// cost of that ordering is a possible duplicate, which is far cheaper than
+    /// a silently dropped capture.
+    @discardableResult
+    func drainSharedInbox(into context: ModelContext) async -> Int {
+        let pending = SharedInbox.pendingFiles()
+        guard !pending.isEmpty else { return 0 }
+
+        var imported = 0
+        for file in pending {
+            activity = "Importing shared item"
+            let saved: MemoryItem?
+
+            // Text shares are written as .txt; route them through the note path
+            // so a shared URL still becomes a link.
+            if file.pathExtension.lowercased() == "txt",
+               let text = try? String(contentsOf: file, encoding: .utf8) {
+                saved = await saveNote(text: text, in: context)
+            } else {
+                saved = await saveFile(at: file, in: context)
+            }
+
+            if saved != nil {
+                imported += 1
+                SharedInbox.remove(file)
+            } else {
+                // Unreadable payload: drop it rather than retrying forever.
+                SharedInbox.remove(file)
+            }
+        }
+
+        activity = nil
+        return imported
     }
 
     // MARK: - Enrichment
