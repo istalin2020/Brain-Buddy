@@ -106,6 +106,14 @@ nudged by query-term coverage, recency, and pinned status. Query text is
 stripped of conversational filler first, so *"hey, what did I save about the
 dentist?"* searches for `dentist`.
 
+**Numbers are treated as numbers.** A period between two digits is a decimal
+point, not a sentence break — so a lab row reads back as `TSH 5.46 0.270 - 4.20
+uIU/mL`, and `5.46` is one searchable token rather than a `5` and a `46`. When
+several lines match a question equally, the one carrying a value wins over the
+heading that merely names it, and a bare label is joined to the line beneath it
+(OCR splits table rows more often than you'd like). Getting this wrong is worse
+than finding nothing: `TSH 5` looks like an answer.
+
 Tap the microphone and the same pipeline runs on live dictation. The composed
 answer is **extractive** — it quotes what you actually stored, with a "from your
 note yesterday…" preamble. It never generates prose, so it can't tell you

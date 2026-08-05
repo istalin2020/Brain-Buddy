@@ -168,22 +168,44 @@ final class SearchEngine {
 
     // MARK: - Snippets
 
-    /// Picks the sentence with the most query terms, so the result row shows the
-    /// part you were actually looking for instead of the first line.
+    /// Picks the line with the most query terms, so the result row shows the part
+    /// you were actually looking for instead of the first line.
+    ///
+    /// Two refinements matter for documents, which is where the answer to a
+    /// question like "what was my TSH" usually lives:
+    ///
+    /// 1. **A number breaks ties.** `TSH` as a section heading and
+    ///    `TSH 5.46 0.270 - 4.20 uIU/mL` both match the word; only one of them
+    ///    answers the question.
+    /// 2. **A bare label is joined to the line below it.** OCR splits a table row
+    ///    into separate observations often enough that the label and its value
+    ///    land on consecutive lines, and a snippet of just `TSH` is useless.
     static func snippet(for queryTerms: [String], in text: String, limit: Int = 220) -> String {
-        let sentences = Tokenizer.sentences(in: text)
-        guard !sentences.isEmpty else { return String(text.prefix(limit)) }
+        let lines = Tokenizer.sentences(in: text)
+        guard !lines.isEmpty else { return String(text.prefix(limit)) }
 
         let wanted = Set(queryTerms)
-        var best = sentences[0]
+        var bestIndex = 0
         var bestScore = -1
+        var bestMatches = 0
 
-        for sentence in sentences {
-            let terms = Set(Tokenizer.tokens(in: sentence))
-            let score = terms.intersection(wanted).count
+        for (index, line) in lines.enumerated() {
+            let matches = Set(Tokenizer.tokens(in: line)).intersection(wanted).count
+            let score = matches * 10 + (line.contains(where: \.isNumber) ? 1 : 0)
             if score > bestScore {
                 bestScore = score
-                best = sentence
+                bestMatches = matches
+                bestIndex = index
+            }
+        }
+
+        var best = lines[bestIndex]
+        if bestMatches > 0,
+           !best.contains(where: \.isNumber),
+           bestIndex + 1 < lines.count {
+            let follower = lines[bestIndex + 1]
+            if follower.contains(where: \.isNumber), best.count + follower.count + 1 <= limit {
+                best += " " + follower
             }
         }
 

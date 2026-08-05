@@ -98,11 +98,17 @@ enum BriefBuilder {
             guard !body.isEmpty else { continue }
 
             let range = NSRange(body.startIndex..<body.endIndex, in: body)
-            for match in detector.matches(in: body, options: [], range: range) {
+            let matches = detector.matches(in: body, options: [], range: range)
+            guard !matches.isEmpty else { continue }
+            // Computed once per note rather than once per match: a long document
+            // can hold dozens of dates, and each lookup otherwise rescans it.
+            let sentenceRanges = Tokenizer.sentenceRanges(in: body)
+
+            for match in matches {
                 guard let date = match.date, calendar.isDate(date, inSameDayAs: dayStart) else { continue }
                 guard let matchRange = Range(match.range, in: body) else { continue }
 
-                let sentence = sentenceContaining(matchRange, in: body)
+                let sentence = sentenceContaining(matchRange, in: body, ranges: sentenceRanges)
                 guard !sentence.isEmpty else { continue }
                 let key = BriefEntry.dedupeKey(for: sentence)
                 guard !key.isEmpty else { continue }
@@ -143,18 +149,20 @@ enum BriefBuilder {
 
     /// The sentence a detected date sits inside, so the brief line reads as
     /// something you wrote rather than as a bare timestamp.
-    private static func sentenceContaining(_ range: Range<String.Index>, in text: String) -> String {
-        let breaks = CharacterSet(charactersIn: ".!?\n")
-
-        var start = text.startIndex
-        if let before = text.rangeOfCharacter(from: breaks, options: .backwards, range: text.startIndex..<range.lowerBound) {
-            start = before.upperBound
-        }
-        var end = text.endIndex
-        if let after = text.rangeOfCharacter(from: breaks, range: range.upperBound..<text.endIndex) {
-            end = after.lowerBound
-        }
-        return AnswerComposer.tighten(String(text[start..<end]), limit: 200)
+    ///
+    /// Uses `Tokenizer`'s sentence boundaries rather than splitting on
+    /// punctuation here, so that "the 5.30 train" survives intact — and so there
+    /// is one definition of where a sentence ends.
+    private static func sentenceContaining(
+        _ range: Range<String.Index>,
+        in text: String,
+        ranges: [Range<String.Index>]
+    ) -> String {
+        let sentence = ranges.first { $0.contains(range.lowerBound) }.map { String(text[$0]) } ?? text
+        return AnswerComposer.tighten(
+            sentence.trimmingCharacters(in: CharacterSet(charactersIn: ".!?").union(.whitespacesAndNewlines)),
+            limit: 200
+        )
     }
 
     // MARK: - Tasks
