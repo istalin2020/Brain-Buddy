@@ -46,10 +46,21 @@ final class AudioRecorder {
     /// meaning of "off", but what you already recorded is never thrown away.
     var allowsBackgroundRecording = true
 
+    /// Seconds of wall-clock time that passed off screen without being recorded.
+    ///
+    /// Measured rather than assumed. If iOS suspends the process the recorder
+    /// simply stops advancing, with no error and no notification — the only
+    /// evidence is that time away exceeds audio captured. Reporting the gap turns
+    /// "it didn't record in the background" into a number, and distinguishes
+    /// being suspended from every other reason a recording can come up short.
+    private(set) var secondsLostWhileAway: TimeInterval = 0
+
     private var recorder: AVAudioRecorder?
     private var meterTask: Task<Void, Never>?
     private var fileURL: URL?
     private var observers: [any NSObjectProtocol] = []
+    private var leftScreenAt: Date?
+    private var recordedTimeOnLeaving: TimeInterval = 0
 
     private let maximumLevelSamples = 48
 
@@ -154,6 +165,8 @@ final class AudioRecorder {
         pauseReason = nil
         duration = 0
         levels = []
+        secondsLostWhileAway = 0
+        leftScreenAt = nil
         startObserving()
         startMetering()
     }
@@ -193,6 +206,8 @@ final class AudioRecorder {
         pauseReason = nil
         duration = 0
         levels = []
+        secondsLostWhileAway = 0
+        leftScreenAt = nil
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
@@ -269,7 +284,34 @@ final class AudioRecorder {
                     // and the recording stops mid-word with no notice. Pausing on
                     // purpose keeps what we have and gives the user a reason.
                     self.pause(reason: "Paused: this build can't record off screen — the Background Modes › Audio capability is missing.")
+                } else {
+                    self.noteLeavingScreen()
                 }
+            }
+        })
+
+        // Coming back is when the damage can be measured.
+        observers.append(center.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.noteReturningToScreen() }
+        })
+
+        // A headset being unplugged mid-recording stops the engine on some routes;
+        // reclaiming the session keeps the rest of the conversation.
+        observers.append(center.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            let reason = (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
+                .flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
+            guard reason == .oldDeviceUnavailable else { return }
+            MainActor.assumeIsolated {
+                guard let self, self.isRecording, self.isPaused else { return }
+                self.resume()
             }
         })
     }
@@ -286,14 +328,42 @@ final class AudioRecorder {
         case .began:
             pause(reason: "Paused — something else is using the microphone.")
         case .ended:
-            // Only auto-resume what an interruption paused. A recording paused
-            // because the user left the app stays paused until they come back
-            // and say so.
-            guard shouldResume, isPaused, allowsBackgroundRecording else { return }
+            guard isPaused, allowsBackgroundRecording else { return }
+            // `shouldResume` is a hint, and not every interruption sets it —
+            // locking the screen and some route changes end without it. This
+            // recording was in progress before something took the microphone, so
+            // try to reclaim it either way and let `resume()` report a failure.
+            _ = shouldResume
             resume()
         default:
             break
         }
+    }
+
+    // MARK: - Measuring time off screen
+
+    private func noteLeavingScreen() {
+        guard let recorder, isRecording, !isPaused else { return }
+        leftScreenAt = Date()
+        recordedTimeOnLeaving = recorder.currentTime
+    }
+
+    /// Compares wall-clock time away against audio actually captured.
+    ///
+    /// A suspended process leaves no trace except this discrepancy: the recorder
+    /// is still "recording" and its file is intact, it just stopped advancing
+    /// while the app was frozen.
+    private func noteReturningToScreen() {
+        guard let away = leftScreenAt else { return }
+        leftScreenAt = nil
+        guard let recorder, isRecording, !isPaused else { return }
+
+        let elapsed = Date().timeIntervalSince(away)
+        let captured = recorder.currentTime - recordedTimeOnLeaving
+        let missed = elapsed - captured
+        // A second of slack absorbs the ordinary lag around backgrounding; more
+        // than that means audio genuinely went missing.
+        if missed > 1.5 { secondsLostWhileAway += missed }
     }
 
     // MARK: - Metering

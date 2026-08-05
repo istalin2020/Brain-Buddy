@@ -106,6 +106,10 @@ struct VoiceCaptureView: View {
                     .buttonStyle(.borderedProminent)
             }
 
+            if recorder.secondsLostWhileAway > 1.5 {
+                suspensionWarning
+            }
+
             Spacer()
 
             MicButton(isActive: recorder.isRecording && !recorder.isPaused) {
@@ -120,6 +124,24 @@ struct VoiceCaptureView: View {
 
             Spacer(minLength: 24)
         }
+    }
+
+    /// Shown when measured time away exceeded audio captured — i.e. iOS froze the
+    /// app instead of letting it record. Says so with a number rather than
+    /// leaving a silently short recording to be discovered later.
+    private var suspensionWarning: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("iOS paused this app off screen", systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.orange)
+            Text("About \(Int(recorder.secondsLostWhileAway.rounded())) seconds weren't recorded while Brain Buddy was in the background. Settings › Voice recording shows whether this build is allowed to record off screen.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 20)
     }
 
     private var savingStage: some View {
