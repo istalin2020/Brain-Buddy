@@ -23,24 +23,32 @@ enum DiscussionSummarizer {
         var isEmpty: Bool { keyPoints.isEmpty && followUps.isEmpty }
 
         /// The form that gets stored on the memory and read on screen.
+        ///
+        /// `DiscussionSummarizer.parse` reads this back, so both sides go through
+        /// the shared heading constants rather than repeating the literals.
         var text: String {
             var lines: [String] = []
             if !topics.isEmpty {
-                lines.append("Topics: " + topics.joined(separator: ", "))
+                lines.append(DiscussionSummarizer.topicsPrefix + topics.joined(separator: ", "))
             }
             if !keyPoints.isEmpty {
                 if !lines.isEmpty { lines.append("") }
-                lines.append("Key points")
-                lines.append(contentsOf: keyPoints.map { "• \($0)" })
+                lines.append(DiscussionSummarizer.keyPointsHeading)
+                lines.append(contentsOf: keyPoints.map { "\(DiscussionSummarizer.bullet) \($0)" })
             }
             if !followUps.isEmpty {
                 if !lines.isEmpty { lines.append("") }
-                lines.append("Follow-ups")
-                lines.append(contentsOf: followUps.map { "• \($0)" })
+                lines.append(DiscussionSummarizer.followUpsHeading)
+                lines.append(contentsOf: followUps.map { "\(DiscussionSummarizer.bullet) \($0)" })
             }
             return lines.joined(separator: "\n")
         }
     }
+
+    static let topicsPrefix = "Topics: "
+    static let keyPointsHeading = "Key points"
+    static let followUpsHeading = "Follow-ups"
+    static let bullet = "•"
 
     /// Shortest transcript worth condensing. Below this a "summary" would just be
     /// the transcript with bullets in front of it, which is worse than nothing
@@ -99,6 +107,50 @@ enum DiscussionSummarizer {
             followUps: followUpIndexes.map { sentences[$0] }
         )
         return summary.isEmpty ? nil : summary
+    }
+
+    // MARK: - Reading a stored summary back
+
+    /// Parses the rendered form produced by `Summary.text`.
+    ///
+    /// Summaries are stored as text rather than as structured fields — one
+    /// CloudKit-mirrored `String` instead of three, and it's what the user reads.
+    /// The morning brief needs the structure back, though: key points and
+    /// follow-ups belong in different sections of the brief.
+    static func parse(_ stored: String) -> Summary? {
+        guard !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+
+        enum Section { case keyPoints, followUps }
+        var section: Section = .keyPoints
+        var topics: [String] = []
+        var keyPoints: [String] = []
+        var followUps: [String] = []
+
+        for rawLine in stored.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+
+            if line.hasPrefix(topicsPrefix) {
+                topics = line.dropFirst(topicsPrefix.count)
+                    .components(separatedBy: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                continue
+            }
+            if line == keyPointsHeading { section = .keyPoints; continue }
+            if line == followUpsHeading { section = .followUps; continue }
+
+            guard line.hasPrefix(bullet) else { continue }
+            let body = line.dropFirst(bullet.count).trimmingCharacters(in: .whitespaces)
+            guard !body.isEmpty else { continue }
+            switch section {
+            case .keyPoints: keyPoints.append(body)
+            case .followUps: followUps.append(body)
+            }
+        }
+
+        let summary = Summary(topics: topics, keyPoints: keyPoints, followUps: followUps)
+        return summary.isEmpty && topics.isEmpty ? nil : summary
     }
 
     // MARK: - Sentence selection

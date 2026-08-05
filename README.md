@@ -37,6 +37,37 @@ routing is by file type, so there's no manifest or versioned schema to keep in
 sync between two binaries. Files are deleted only **after** their memory is
 saved, so an interrupted import loses nothing.
 
+### The morning brief
+
+A notification at **8:00 every morning**, and a **Today** tab holding a brief
+built from what you already captured:
+
+| Section | Where it comes from |
+| --- | --- |
+| **Today's schedule** | Dates detected anywhere in your notes that land on today, quoted as the sentence you wrote them in. A note from last month saying "quarterly review on the 14th" is exactly what this is for, so schedule detection ignores how old the capture is. |
+| **Tasks** | Sentences carrying a commitment — *have to*, *will*, *should*, *let's*, *priority* — from the last two weeks. The same cue detection the summarizer uses. |
+| **Key points** | Key points out of discussions you summarized in the last week. |
+
+Every line has a circle you tap to **close** it, or leave open. Closing survives
+relaunching and syncs to your other devices, because a brief you can't tick off
+is just a search result. Swipe for the same thing, plus *Remove* for a line that
+turned out not to be a task at all.
+
+Anything you leave open shows up again the next day under **Still open from
+before**, with the date it came from — one row with one history, not a fresh copy
+every morning. Anything you close stays closed and doesn't come back. A dated line
+is the exception: standup on Tuesday and standup on Wednesday are the same
+sentence and two different occurrences.
+
+**On "generated at 8 am".** iOS gives no app a guaranteed slot to run at a fixed
+time. Rather than pretend otherwise, the 8 am *notification* is the alarm — that
+part the system delivers reliably, whether or not you've opened the app in weeks —
+and the brief is built the moment you open it, stamped with when that was.
+Building it reads only local data and takes milliseconds, so opening the
+notification and reading the brief are one gesture. The time is adjustable in
+Settings › Morning brief, and permission is asked for the first time the Today tab
+is on screen rather than as a cold prompt at first launch.
+
 ### Recording a discussion
 
 Voice capture is built for the long case, not just the ten-second reminder:
@@ -155,8 +186,13 @@ The suite covers the parts worth pinning down: tokenizer normalization and
 stemming, BM25 scoring and IDF non-negativity, vector math and the embedding
 blob round-trip, hybrid ranking behavior, answer phrasing, link-vs-note
 detection and link titling, summarizer behavior (including the property that
-matters most — every summary line is quoted verbatim from the transcript), and a
-SwiftData schema smoke test (in-memory, no iCloud).
+matters most — every summary line is quoted verbatim from the transcript), what
+lands in a morning brief and what's correctly left out of it, the stored-summary
+round trip the brief depends on, and a SwiftData schema smoke test (in-memory, no
+iCloud).
+
+`BriefBuilder` is tested against a fixed calendar date, so "what shows up in
+tomorrow's brief" is pinned down rather than dependent on when the suite runs.
 
 ---
 
@@ -165,14 +201,16 @@ SwiftData schema smoke test (in-memory, no iCloud).
 ```
 BrainBuddy/
   App/          BrainBuddyApp, AppServices (shared singletons), PersistenceController
-  Models/       MemoryItem, MemoryAttachment, MemoryTag  (SwiftData + CloudKit)
+  Models/       MemoryItem, MemoryAttachment, MemoryTag, BriefEntry  (SwiftData + CloudKit)
   Search/       Tokenizer, BM25Index, VectorMath, EmbeddingService,
                 SearchEngine (hybrid ranking), AnswerComposer
   Services/     IngestService (the one capture path), TextAnalysis, TextRecognizer,
                 PDFTextExtractor, AudioRecorder, SpeechTranscriber, SpeechSpeaker,
                 DiscussionSummarizer, AudioPlayerController, CloudSyncMonitor
+  Services/     … BriefBuilder (what goes in a brief) + BriefService (persistence),
+                NotificationScheduler, NotificationRouter
   Services/     … SharedInbox (App Group hand-off from the extension)
-  Views/        RootView, CaptureView, VoiceCaptureView, LibraryView,
+  Views/        RootView, TodayView, CaptureView, VoiceCaptureView, LibraryView,
                 MemoryDetailView, AskView, SettingsView, Components/
   Resources/    Assets.xcassets, PrivacyInfo.xcprivacy
 BrainBuddyShare/  ShareViewController — the share extension
@@ -209,6 +247,15 @@ search behavior testable without a device or a container.
   quoted correctly; who said them isn't recorded.
 - **Background recording needs the app to have been foregrounded to start.** iOS
   won't let a suspended app begin recording — start it, then lock the screen.
+- **The brief is built on open, not at 8 am.** See above; the notification is what
+  the system guarantees, not the computation.
+- **Date detection is `NSDataDetector`, so it's as good as your phrasing.** "Review
+  on the 14th at 3pm" is found; "review next time we meet" isn't a date and won't
+  be treated as one.
+- **Briefs can duplicate a line across devices.** Two phones that both build
+  today's brief before iCloud has synced the other's entries will each add it. The
+  duplicate is visible and closable rather than silent, which is the better failure
+  for a checklist.
 - **The app icon is a generated placeholder.** Replace
   `BrainBuddy/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`
   before shipping.

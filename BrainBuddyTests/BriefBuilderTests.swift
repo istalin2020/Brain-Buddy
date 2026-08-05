@@ -1,0 +1,282 @@
+import XCTest
+@testable import BrainBuddy
+
+final class BriefBuilderTests: XCTestCase {
+    private let calendar = Calendar(identifier: .gregorian)
+
+    /// Fixed day so nothing here depends on when the suite runs.
+    private var today: Date {
+        calendar.date(from: DateComponents(year: 2026, month: 8, day: 5))!
+    }
+
+    private func source(
+        text: String,
+        summary: String = "",
+        daysAgo: Int = 0,
+        title: String = "A note"
+    ) -> BriefSource {
+        BriefSource(
+            identifier: UUID(),
+            title: title,
+            text: text,
+            summary: summary,
+            createdAt: calendar.date(byAdding: .day, value: -daysAgo, to: today)!,
+            kindTitle: "Note"
+        )
+    }
+
+    /// Writes a date the way `NSDataDetector` reliably reads it, so schedule tests
+    /// assert on the builder rather than on a particular phrasing.
+    private func absolutePhrase(for date: Date, hour: Int, minute: Int = 0) -> String {
+        let stamp = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: date)!
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.dateFormat = "MMMM d, yyyy 'at' h:mm a"
+        return formatter.string(from: stamp)
+    }
+
+    // MARK: - Schedule
+
+    func testDateOnTodayBecomesAScheduleLine() {
+        let phrase = absolutePhrase(for: today, hour: 16)
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [source(text: "Site review with PCH on \(phrase). Bring the drawings.")],
+            calendar: calendar
+        )
+
+        let schedule = candidates.filter { $0.kind == .schedule }
+        XCTAssertEqual(schedule.count, 1)
+        XCTAssertTrue(schedule[0].text.contains("Site review with PCH"))
+        XCTAssertNotNil(schedule[0].scheduledAt, "a time was given, so it should be carried")
+    }
+
+    /// Only the sentence around the date, not the whole note.
+    func testScheduleLineIsTheSentenceNotTheWholeNote() throws {
+        let phrase = absolutePhrase(for: today, hour: 9, minute: 30)
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [source(text: "Unrelated first thought. Standup on \(phrase). Another unrelated thought.")],
+            calendar: calendar
+        )
+
+        let schedule = try XCTUnwrap(candidates.first { $0.kind == .schedule })
+        XCTAssertTrue(schedule.text.contains("Standup"))
+        XCTAssertFalse(schedule.text.contains("Unrelated first thought"))
+        XCTAssertFalse(schedule.text.contains("Another unrelated"))
+    }
+
+    func testDateOnAnotherDayIsIgnored() {
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [source(text: "Dentist on \(absolutePhrase(for: tomorrow, hour: 11)).")],
+            calendar: calendar
+        )
+        XCTAssertTrue(candidates.filter { $0.kind == .schedule }.isEmpty)
+    }
+
+    /// A dated reminder written a month ago is exactly what a brief is for, so
+    /// schedule detection must not be limited by how old the capture is.
+    func testOldNoteStillSurfacesTodaysDate() {
+        let phrase = absolutePhrase(for: today, hour: 15)
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [source(text: "Quarterly review on \(phrase).", daysAgo: 60)],
+            calendar: calendar
+        )
+        XCTAssertEqual(candidates.filter { $0.kind == .schedule }.count, 1)
+    }
+
+    func testScheduleLinesAreSortedByTime() {
+        let late = absolutePhrase(for: today, hour: 17)
+        let early = absolutePhrase(for: today, hour: 8)
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [source(text: "Wrap-up call on \(late). Kickoff on \(early).")],
+            calendar: calendar
+        )
+
+        let schedule = candidates.filter { $0.kind == .schedule }
+        XCTAssertEqual(schedule.count, 2)
+        XCTAssertTrue(schedule[0].text.contains("Kickoff"), "earliest first")
+    }
+
+    // MARK: - Tasks
+
+    func testCommitmentSentencesBecomeTasks() {
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [source(text: "The yard was quiet today. I have to close the PCH approval this week.")],
+            calendar: calendar
+        )
+
+        let tasks = candidates.filter { $0.kind == .task }
+        XCTAssertEqual(tasks.count, 1)
+        XCTAssertTrue(tasks[0].text.contains("close the PCH approval"))
+    }
+
+    func testPlainObservationsAreNotTasks() {
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [source(text: "The yard was quiet today. It rained the whole afternoon.")],
+            calendar: calendar
+        )
+        XCTAssertTrue(candidates.filter { $0.kind == .task }.isEmpty)
+    }
+
+    func testTasksOlderThanTheWindowAreDropped() {
+        let text = "I have to renew the insurance policy."
+        let recent = BriefBuilder.build(for: today, from: [source(text: text, daysAgo: 3)], calendar: calendar)
+        let stale = BriefBuilder.build(for: today, from: [source(text: text, daysAgo: 90)], calendar: calendar)
+
+        XCTAssertEqual(recent.filter { $0.kind == .task }.count, 1)
+        XCTAssertTrue(stale.filter { $0.kind == .task }.isEmpty)
+    }
+
+    func testTasksAreCapped() {
+        let sentences = (1...30).map { "I have to finish item number \($0) before the deadline." }
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [source(text: sentences.joined(separator: " "))],
+            calendar: calendar
+        )
+        XCTAssertLessThanOrEqual(candidates.filter { $0.kind == .task }.count, BriefBuilder.maximumTasks)
+    }
+
+    // MARK: - Summaries feed the brief
+
+    func testSavedSummaryFeedsPointsAndFollowUps() {
+        let summary = DiscussionSummarizer.Summary(
+            topics: ["tower material"],
+            keyPoints: ["The material has been at the yard since March"],
+            followUps: ["I have to close the PCH approval this week"]
+        ).text
+
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [source(text: "long transcript here", summary: summary, daysAgo: 1)],
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            candidates.filter { $0.kind == .point }.map(\.text),
+            ["The material has been at the yard since March"]
+        )
+        XCTAssertEqual(
+            candidates.filter { $0.kind == .task }.map(\.text),
+            ["I have to close the PCH approval this week"]
+        )
+    }
+
+    /// Discussion points age out faster than tasks: a point from last month is
+    /// history, a task from last month may still be owed.
+    func testPointsUseTheShorterWindow() {
+        let summary = DiscussionSummarizer.Summary(
+            topics: [],
+            keyPoints: ["The material has been at the yard since March"],
+            followUps: []
+        ).text
+
+        let stale = BriefBuilder.build(
+            for: today,
+            from: [source(text: "transcript", summary: summary, daysAgo: 10)],
+            calendar: calendar
+        )
+        XCTAssertTrue(stale.filter { $0.kind == .point }.isEmpty)
+    }
+
+    // MARK: - No line twice
+
+    func testADatedCommitmentAppearsOnlyOnce() {
+        let phrase = absolutePhrase(for: today, hour: 14)
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [source(text: "I have to send the signed contract on \(phrase).")],
+            calendar: calendar
+        )
+
+        XCTAssertEqual(candidates.count, 1, "one sentence should produce one line")
+        XCTAssertEqual(candidates[0].kind, .schedule, "a dated line belongs in the schedule")
+    }
+
+    func testTheSameSentenceInTwoNotesProducesOneLine() {
+        let text = "I have to close the PCH approval this week."
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [source(text: text, daysAgo: 1), source(text: text, daysAgo: 2)],
+            calendar: calendar
+        )
+        XCTAssertEqual(candidates.filter { $0.kind == .task }.count, 1)
+    }
+
+    func testEmptyLibraryProducesNothing() {
+        XCTAssertTrue(BriefBuilder.build(for: today, from: [], calendar: calendar).isEmpty)
+    }
+
+    func testBlankSourcesProduceNothing() {
+        XCTAssertTrue(
+            BriefBuilder.build(for: today, from: [source(text: "   ", title: "")], calendar: calendar).isEmpty
+        )
+    }
+
+    // MARK: - Dedupe keys
+
+    func testDedupeKeyIgnoresPunctuationAndCase() {
+        XCTAssertEqual(
+            BriefEntry.dedupeKey(for: "Close the PCH approval!"),
+            BriefEntry.dedupeKey(for: "close the pch approval")
+        )
+    }
+
+    func testDifferentSentencesGetDifferentKeys() {
+        XCTAssertNotEqual(
+            BriefEntry.dedupeKey(for: "Close the PCH approval"),
+            BriefEntry.dedupeKey(for: "Renew the insurance policy")
+        )
+    }
+}
+
+/// The stored-summary round trip the brief depends on.
+final class SummaryRoundTripTests: XCTestCase {
+    func testRenderedSummaryParsesBack() throws {
+        let original = DiscussionSummarizer.Summary(
+            topics: ["PCH", "tower material"],
+            keyPoints: ["The material has been at the yard since March", "Rent accrues weekly"],
+            followUps: ["I have to close the approval this week"]
+        )
+        let parsed = try XCTUnwrap(DiscussionSummarizer.parse(original.text))
+        XCTAssertEqual(parsed, original)
+    }
+
+    func testParsingEmptyTextReturnsNil() {
+        XCTAssertNil(DiscussionSummarizer.parse(""))
+        XCTAssertNil(DiscussionSummarizer.parse("   \n  "))
+    }
+
+    func testParsingIgnoresUnrecognizedLines() throws {
+        let text = """
+        Topics: PCH
+
+        Key points
+        • The material is still at the yard
+        some stray line without a bullet
+
+        Follow-ups
+        • I have to call the yard
+        """
+        let parsed = try XCTUnwrap(DiscussionSummarizer.parse(text))
+        XCTAssertEqual(parsed.topics, ["PCH"])
+        XCTAssertEqual(parsed.keyPoints, ["The material is still at the yard"])
+        XCTAssertEqual(parsed.followUps, ["I have to call the yard"])
+    }
+
+    /// A hand-typed summary with no headings still yields something usable rather
+    /// than being thrown away.
+    func testBulletsWithoutHeadingsBecomeKeyPoints() throws {
+        let parsed = try XCTUnwrap(DiscussionSummarizer.parse("• first thing\n• second thing"))
+        XCTAssertEqual(parsed.keyPoints, ["first thing", "second thing"])
+        XCTAssertTrue(parsed.followUps.isEmpty)
+    }
+}

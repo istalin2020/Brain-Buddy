@@ -13,6 +13,9 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.semanticSearch) private var semanticSearch = true
     @AppStorage(PreferenceKey.autoStopDictation) private var autoStopDictation = true
     @AppStorage(PreferenceKey.backgroundRecording) private var backgroundRecording = true
+    @AppStorage(PreferenceKey.morningBrief) private var morningBrief = true
+    @AppStorage(PreferenceKey.morningBriefHour) private var briefHour = 8
+    @AppStorage(PreferenceKey.morningBriefMinute) private var briefMinute = 0
 
     @State private var reindexProgress: Double?
     @State private var pendingSharedItems = 0
@@ -21,6 +24,7 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 syncSection
+                briefSection
                 searchSection
                 recordingSection
                 sharingSection
@@ -32,7 +36,11 @@ struct SettingsView: View {
             .task {
                 pendingSharedItems = SharedInbox.pendingFiles().count
                 await services.syncMonitor.refresh()
+                await services.notifications.refresh()
             }
+            .onChange(of: morningBrief) { _, _ in rescheduleBrief() }
+            .onChange(of: briefHour) { _, _ in rescheduleBrief() }
+            .onChange(of: briefMinute) { _, _ in rescheduleBrief() }
             .onChange(of: semanticSearch) { _, _ in services.applyPreferences() }
             .onChange(of: autoStopDictation) { _, _ in services.applyPreferences() }
             .onChange(of: backgroundRecording) { _, _ in services.applyPreferences() }
@@ -75,6 +83,58 @@ struct SettingsView: View {
         } footer: {
             Text(PersistenceController.shared.mode.description)
         }
+    }
+
+    private var briefSection: some View {
+        Section {
+            Toggle("Daily reminder", isOn: $morningBrief)
+
+            if morningBrief {
+                DatePicker("Time", selection: briefTimeBinding, displayedComponents: .hourAndMinute)
+
+                if let next = services.notifications.nextTrigger {
+                    LabeledContent(
+                        "Next reminder",
+                        value: next.formatted(date: .abbreviated, time: .shortened)
+                    )
+                }
+            }
+
+            if services.notifications.isDenied {
+                Text("Notifications are off for Brain Buddy in iOS Settings, so the reminder can't be delivered. Your brief still builds when you open the app.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        } header: {
+            Text("Morning brief")
+        } footer: {
+            Text("A notification at this time every day, and the Today tab shows what's on, what you said you'd do, and the key points from recent discussions.\n\niOS gives no app a guaranteed slot to run at a fixed time, so the notification is the alarm and the brief is built the moment you open the app — stamped with when that was. Nothing is computed on a server; it all comes from what's already on this device.")
+        }
+    }
+
+    /// The stored hour and minute, surfaced as the `Date` a `DatePicker` wants.
+    private var briefTimeBinding: Binding<Date> {
+        Binding(
+            get: {
+                Calendar.current.date(
+                    bySettingHour: briefHour,
+                    minute: briefMinute,
+                    second: 0,
+                    of: Date()
+                ) ?? Date()
+            },
+            set: { newValue in
+                let parts = Calendar.current.dateComponents([.hour, .minute], from: newValue)
+                briefHour = parts.hour ?? 8
+                briefMinute = parts.minute ?? 0
+            }
+        )
+    }
+
+    /// Flipping the switch *is* the permission request, so this path prompts —
+    /// unlike the silent reapply at launch.
+    private func rescheduleBrief() {
+        Task { await services.applyMorningBriefPreference() }
     }
 
     private var searchSection: some View {
