@@ -117,7 +117,14 @@ final class SearchEngine {
                     score: total,
                     lexicalScore: lexical,
                     semanticScore: meaning,
-                    snippet: Self.snippet(for: queryTerms, in: document.body.isEmpty ? document.title : document.body)
+                    snippet: Self.snippet(
+                        for: queryTerms,
+                        in: document.body.isEmpty ? document.title : document.body,
+                        // The index already knows which of the query's words are
+                        // rare across everything saved; the line picker needs it
+                        // for exactly the same reason ranking does.
+                        corpusWeight: { index.inverseDocumentFrequency(for: $0) }
+                    )
                 )
             )
         }
@@ -168,39 +175,70 @@ final class SearchEngine {
 
     // MARK: - Snippets
 
-    /// Picks the line with the most query terms, so the result row shows the part
-    /// you were actually looking for instead of the first line.
+    /// Picks the line that answers the question, rather than the first line that
+    /// happens to contain one of its words.
     ///
-    /// Two refinements matter for documents, which is where the answer to a
-    /// question like "what was my TSH" usually lives:
+    /// Counting matched terms is not enough, and the way it fails is instructive.
+    /// "What is my TSH value from the latest report" matches `report` on three
+    /// header lines of a lab report — *Report No*, *Reported Date*, *Report
+    /// Status* — and `tsh` on exactly one result row. One match each, so the
+    /// header wins on document order, and the app confidently answers with a
+    /// date. Four signals fix that, in order of weight:
     ///
-    /// 1. **A number breaks ties.** `TSH` as a section heading and
-    ///    `TSH 5.46 0.270 - 4.20 uIU/mL` both match the word; only one of them
-    ///    answers the question.
-    /// 2. **A bare label is joined to the line below it.** OCR splits a table row
-    ///    into separate observations often enough that the label and its value
-    ///    land on consecutive lines, and a snippet of just `TSH` is useless.
-    static func snippet(for queryTerms: [String], in text: String, limit: Int = 220) -> String {
+    /// 1. **Rare words count for more.** A term on many lines of a document
+    ///    explains nothing about which line to show; `report` is everywhere in a
+    ///    report, `tsh` is the thing being asked about.
+    /// 2. **Rare across your whole brain counts for more**, when the caller can
+    ///    supply corpus IDF — which `rank` can, from the index it already built.
+    /// 3. **A label next to a number is an answer.** `TSH 5.46` puts a matched
+    ///    term immediately before a value; `Reported Date : 29/07/2026` doesn't.
+    ///    That shape is exactly what "what is my X" is asking for.
+    /// 4. **Any number at all** settles what's left.
+    ///
+    /// One repair on top: a bare label is joined to the line beneath it, because
+    /// OCR splits table rows into separate observations often enough that the
+    /// label and its value end up on consecutive lines.
+    static func snippet(
+        for queryTerms: [String],
+        in text: String,
+        limit: Int = 220,
+        corpusWeight: ((String) -> Double)? = nil
+    ) -> String {
         let lines = Tokenizer.sentences(in: text)
         guard !lines.isEmpty else { return String(text.prefix(limit)) }
 
         let wanted = Set(queryTerms)
-        var bestIndex = 0
-        var bestScore = -1
-        var bestMatches = 0
+        guard !wanted.isEmpty else { return clipped(lines[0], to: limit) }
 
-        for (index, line) in lines.enumerated() {
-            let matches = Set(Tokenizer.tokens(in: line)).intersection(wanted).count
-            let score = matches * 10 + (line.contains(where: \.isNumber) ? 1 : 0)
+        let lineTokens = lines.map { Tokenizer.tokens(in: $0) }
+        let weights = termWeights(for: wanted, across: lineTokens, corpusWeight: corpusWeight)
+
+        var bestIndex = 0
+        var bestScore = 0.0
+        var didMatch = false
+
+        for (index, tokens) in lineTokens.enumerated() {
+            let present = Set(tokens).intersection(wanted)
+            guard !present.isEmpty else { continue }
+
+            // Floor, so a line that matched still beats one that didn't even when
+            // every one of its terms turned out to be worthless.
+            var score = max(0.001, present.reduce(0.0) { $0 + (weights[$1] ?? 0) })
+            if labelPrecedesValue(tokens, wanted: wanted) {
+                score *= 2.5
+            } else if tokens.contains(where: { $0.first?.isNumber == true }) {
+                score *= 1.05
+            }
+
             if score > bestScore {
                 bestScore = score
-                bestMatches = matches
                 bestIndex = index
+                didMatch = true
             }
         }
 
         var best = lines[bestIndex]
-        if bestMatches > 0,
+        if didMatch,
            !best.contains(where: \.isNumber),
            bestIndex + 1 < lines.count {
             let follower = lines[bestIndex + 1]
@@ -208,8 +246,43 @@ final class SearchEngine {
                 best += " " + follower
             }
         }
+        return clipped(best, to: limit)
+    }
 
-        if best.count <= limit { return best }
-        return String(best.prefix(limit)) + "…"
+    /// How much each query term should count, given how common it is here and —
+    /// when the caller knows — across everything else you've saved.
+    private static func termWeights(
+        for terms: Set<String>,
+        across lineTokens: [[String]],
+        corpusWeight: ((String) -> Double)?
+    ) -> [String: Double] {
+        let lineCount = Double(lineTokens.count)
+        guard lineCount > 0 else { return [:] }
+
+        var weights: [String: Double] = [:]
+        for term in terms {
+            let containing = Double(lineTokens.reduce(into: 0) { $0 += $1.contains(term) ? 1 : 0 })
+            guard containing > 0 else { continue }
+            let local = log(1 + lineCount / containing)
+            // Clamped, so a term common across the corpus is discounted rather
+            // than annihilated — it may still be the only thing that matched.
+            let global = corpusWeight.map { max(0.1, $0(term)) } ?? 1
+            weights[term] = local * global
+        }
+        return weights
+    }
+
+    /// The label-then-value shape: a matched term immediately followed by a
+    /// number. A lab row, an invoice line, a receipt total.
+    private static func labelPrecedesValue(_ tokens: [String], wanted: Set<String>) -> Bool {
+        for (index, token) in tokens.enumerated() where wanted.contains(token) {
+            guard index + 1 < tokens.count else { continue }
+            if tokens[index + 1].first?.isNumber == true { return true }
+        }
+        return false
+    }
+
+    private static func clipped(_ text: String, to limit: Int) -> String {
+        text.count <= limit ? text : String(text.prefix(limit)) + "…"
     }
 }

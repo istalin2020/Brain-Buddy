@@ -87,9 +87,18 @@ final class SearchEngineTests: XCTestCase {
 
     /// The report shape this was reported against: asking for TSH must return the
     /// whole row, digits after the decimal point included.
+    /// The header block is the important part of this fixture: it contains the
+    /// word "report" three times, which is what used to hijack the answer.
     private let labReport = """
     DEPARTMENT OF LABORATORY MEDICINE
+    File.No : 14397468
     Name : JOSEPH STALIN KASPAR
+    Report No : 1141055 (tel:1141055)
+    Sample Date : 29/07/2026 10:30:00
+    Reported Date : 29/07/2026 Time
+    Bill No : 2839940
+    Report Status : Approved
+    Ref By : OUT PATIENT
     INVESTIGATION RESULT REFERENCE RANGE
     VITAMIN D3 (25 Hydroxy) 25.11 Normal:30-100 ng/ml
     TFT
@@ -108,6 +117,42 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertFalse(snippet.hasSuffix("TSH 5"))
         // The reference range is on the same row and is part of the answer.
         XCTAssertTrue(snippet.contains("0.270"))
+    }
+
+    /// The exact question that came back with "Reported Date : 29/07/2026 Time".
+    /// `report` matches three header lines and `tsh` matches one; the rare term
+    /// has to win.
+    func testCommonQueryWordsDoNotHijackTheAnswer() {
+        let snippet = SearchEngine.snippet(
+            for: Tokenizer.queryTokens(in: "What is my TSH value from the latest report"),
+            in: labReport
+        )
+        XCTAssertTrue(snippet.contains("TSH"), "got “\(snippet)”")
+        XCTAssertTrue(snippet.contains("5.46"), "got “\(snippet)”")
+        XCTAssertFalse(snippet.contains("29/07/2026"), "answered with a date instead: “\(snippet)”")
+    }
+
+    /// Same question routed through the whole engine, which additionally weights
+    /// terms by how rare they are across the corpus.
+    func testTheEngineAnswersTheQuestionThatWasAsked() {
+        let report = SearchDocument(id: UUID(), title: "Blood test", body: labReport)
+        let noise = (1...5).map {
+            SearchDocument(id: UUID(), title: "Site report \($0)", body: "Report submitted. Reported on time.")
+        }
+        let results = engine.rank(
+            query: "What is my TSH value from the latest report",
+            documents: [report] + noise
+        )
+        let top = results.first
+        XCTAssertEqual(top?.id, report.id)
+        XCTAssertEqual(top?.snippet.contains("5.46"), true, "got “\(top?.snippet ?? "nothing")”")
+    }
+
+    /// "Latest" says which result you want, not what it's about — ranking's
+    /// recency boost already handles it, so it must not dilute the real terms.
+    func testTemporalQualifiersAreTreatedAsFiller() {
+        XCTAssertFalse(Tokenizer.queryTokens(in: "my latest TSH value").contains("latest"))
+        XCTAssertTrue(Tokenizer.queryTokens(in: "my latest TSH value").contains("tsh"))
     }
 
     func testSnippetPrefersTheRowWithAValueOverTheHeading() {

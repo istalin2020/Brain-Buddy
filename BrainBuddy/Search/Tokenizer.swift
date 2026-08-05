@@ -18,12 +18,17 @@ enum Tokenizer {
 
     /// Words that carry no meaning in a spoken query but wreck lexical scoring:
     /// "what did I say about the dentist" should search for "dentist".
+    ///
+    /// "latest" and friends are here because they qualify *which* result you
+    /// want, not what it's about — ranking already applies a recency boost, so
+    /// leaving them in only dilutes the terms that actually discriminate.
     static let questionFillers: Set<String> = [
         "about", "again", "anything", "ask", "buddy", "brain", "can", "did",
-        "do", "does", "everything", "find", "get", "hey", "how", "know", "look",
-        "me", "mine", "note", "notes", "please", "recall", "remember", "remind",
-        "said", "save", "saved", "say", "search", "show", "some", "something",
-        "tell", "thing", "things", "up", "wanna", "want", "was", "whats", "why"
+        "do", "does", "everything", "find", "get", "hey", "how", "know", "latest",
+        "look", "me", "mine", "most", "newest", "note", "notes", "please",
+        "recall", "recent", "remember", "remind", "said", "save", "saved", "say",
+        "search", "show", "some", "something", "tell", "thing", "things", "up",
+        "wanna", "want", "was", "whats", "why"
     ]
 
     /// Splits on anything that is not a letter or a digit, lowercases, strips
