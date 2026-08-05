@@ -281,7 +281,12 @@ struct CaptureView: View {
     // view is `@MainActor`, so the tasks inherit that isolation.
 
     private func saveDraft() {
-        if isDictating { transcriber.cancelListening() }
+        // Saving mid-dictation must not drop the words already recognized but not
+        // yet merged into the draft, so take them explicitly before cancelling.
+        if let base = dictationBase {
+            draft = Self.appending(transcriber.liveTranscript, to: base)
+            transcriber.cancelListening()
+        }
         let text = draft
         draft = ""
         isEditorFocused = false

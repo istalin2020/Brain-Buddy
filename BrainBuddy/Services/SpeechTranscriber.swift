@@ -53,6 +53,9 @@ final class SpeechTranscriber {
     private var silenceWindow: TimeInterval?
 
     private let engine = AVAudioEngine()
+    /// Lets the audio tap — which runs on a real-time thread — feed whichever
+    /// recognition pass is current without knowing when one was swapped out.
+    private let requestBox = RecognitionRequestBox()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var silenceWatcher: Task<Void, Never>?
@@ -60,6 +63,17 @@ final class SpeechTranscriber {
     /// Starts `true`: before any session has run there is nothing left to
     /// deliver, so an early `cancelListening` has no session to end.
     private var didDeliverFinalTranscript = true
+
+    /// Whether a finalized utterance rolls into a new recognition pass instead of
+    /// ending the session. See `startListening(autoStop:)`.
+    private var isContinuous = false
+    /// Text from recognition passes that have already finalized in this session.
+    private var committedTranscript = ""
+    /// The pass currently in progress, still being revised by the recognizer.
+    private var currentPass = ""
+    /// Consecutive failures to start a replacement pass, so a broken recognizer
+    /// can't spin restarting forever.
+    private var consecutiveRestartFailures = 0
 
     private let recognizer: SFSpeechRecognizer? = SFSpeechRecognizer(locale: Locale.current)
         ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -83,10 +97,24 @@ final class SpeechTranscriber {
 
     // MARK: - Live dictation
 
-    /// - Parameter autoStop: whether a pause should end the session. A spoken
-    ///   *question* ends when you stop talking, so Ask leaves this on. Dictating
-    ///   a *note* doesn't — pausing to think is part of composing one — so the
-    ///   capture editor turns it off rather than cutting the user off mid-thought.
+    /// - Parameter autoStop: whether a pause ends the session.
+    ///
+    /// This one flag separates two genuinely different jobs.
+    ///
+    /// **Asking a question** (`true`) is one utterance: you stop talking, the
+    /// recognizer finalizes, the question is asked. That's the Ask tab.
+    ///
+    /// **Dictating a note** (`false`) is not. `SFSpeechRecognizer` finalizes a
+    /// recognition pass whenever you pause — and every pass reports its
+    /// transcript from the beginning of *that pass*, so treating a finalized
+    /// pass as the end of the session makes dictation appear to erase what you
+    /// said and start over the moment you draw breath. In continuous mode a
+    /// finalized pass is banked into `committedTranscript` and a fresh pass
+    /// starts immediately, over the same still-running audio engine. The session
+    /// then ends only when the caller says so.
+    ///
+    /// The same rollover covers the recognizer's roughly one-minute ceiling on a
+    /// single pass, which is otherwise a hard limit on how long you can dictate.
     func startListening(autoStop: Bool = true) async throws {
         guard !isListening else { return }
         guard await Self.requestAuthorization() else { throw TranscriberError.notAuthorized }
@@ -95,35 +123,26 @@ final class SpeechTranscriber {
 
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker])
+            // `.default` rather than `.measurement`: measurement mode strips the
+            // system's input processing — gain control, noise handling — which is
+            // right for taking readings off a signal and wrong for a person
+            // talking at a phone lying on a desk. Recognition of quieter or more
+            // distant speech is noticeably better with it left on.
+            try session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers, .defaultToSpeaker])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
             throw TranscriberError.engineFailure(error.localizedDescription)
         }
 
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        // Prefer the on-device model when the OS has one: nothing you say leaves
-        // the phone, and it keeps working without a connection.
-        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
-        self.request = request
-
         liveTranscript = ""
+        committedTranscript = ""
+        currentPass = ""
+        consecutiveRestartFailures = 0
+        isContinuous = !autoStop
         didDeliverFinalTranscript = false
         lastTranscriptChange = Date()
 
-        task = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            // The handler fires on a private queue; hop back before touching state.
-            Task { @MainActor in
-                guard let self else { return }
-                if let result {
-                    self.liveTranscript = result.bestTranscription.formattedString
-                    self.lastTranscriptChange = Date()
-                    if result.isFinal { self.finishListening() }
-                }
-                if error != nil { self.finishListening() }
-            }
-        }
+        try beginRecognitionPass()
 
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
@@ -132,9 +151,13 @@ final class SpeechTranscriber {
             throw TranscriberError.engineFailure("no audio input is available")
         }
 
+        // The tap outlives any single recognition pass, feeding whichever one is
+        // current. Keeping the engine running across a rollover is what keeps the
+        // gap between passes down to milliseconds.
         input.removeTap(onBus: 0)
+        let box = requestBox
         input.installTap(onBus: 0, bufferSize: 1_024, format: format) { buffer, _ in
-            request.append(buffer)
+            box.append(buffer)
         }
 
         engine.prepare()
@@ -150,6 +173,102 @@ final class SpeechTranscriber {
         startSilenceWatcher()
     }
 
+    /// Starts one recognition pass over the audio the engine is already capturing.
+    private func beginRecognitionPass() throws {
+        guard let recognizer else { throw TranscriberError.recognizerUnavailable }
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        // Prefer the on-device model when the OS has one: nothing you say leaves
+        // the phone, and it keeps working without a connection.
+        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
+        // Dictated notes are read back later; unpunctuated text is much harder to
+        // reread than to hear.
+        request.addsPunctuation = true
+
+        self.request = request
+        requestBox.set(request)
+
+        task = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            // The handler fires on a private queue; hop back before touching state.
+            Task { @MainActor in
+                self?.handle(result: result, error: error)
+            }
+        }
+    }
+
+    private func handle(result: SFSpeechRecognitionResult?, error: Error?) {
+        guard isListening else { return }
+
+        if let result {
+            currentPass = result.bestTranscription.formattedString
+            liveTranscript = Self.joined(committedTranscript, currentPass)
+            lastTranscriptChange = Date()
+            consecutiveRestartFailures = 0
+
+            if result.isFinal {
+                rollOverOrFinish()
+                return
+            }
+        }
+
+        if error != nil {
+            rollOverOrFinish()
+        }
+    }
+
+    /// A pass ended. In continuous mode that's a comma, not a full stop.
+    private func rollOverOrFinish() {
+        commitCurrentPass()
+        guard isContinuous else {
+            finishListening()
+            return
+        }
+
+        task = nil
+        requestBox.set(nil)
+        request = nil
+
+        do {
+            try beginRecognitionPass()
+        } catch {
+            // A recognizer that can't be restarted won't fix itself by being
+            // asked again in a tight loop; give it a few spaced attempts, then
+            // stop with everything banked so far intact.
+            consecutiveRestartFailures += 1
+            guard consecutiveRestartFailures < Self.maximumRestartFailures else {
+                finishListening()
+                return
+            }
+            // Nothing else would ever try again: rollovers are driven by a live
+            // task's callbacks, and right now there isn't one.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard let self, self.isListening, self.isContinuous, self.task == nil else { return }
+                self.rollOverOrFinish()
+            }
+        }
+    }
+
+    private static let maximumRestartFailures = 3
+
+    /// Banks the pass in progress so the next one can start from empty without
+    /// the transcript appearing to reset.
+    private func commitCurrentPass() {
+        let text = currentPass.trimmingCharacters(in: .whitespacesAndNewlines)
+        currentPass = ""
+        guard !text.isEmpty else { return }
+        committedTranscript = Self.joined(committedTranscript, text)
+        liveTranscript = committedTranscript
+    }
+
+    private static func joined(_ committed: String, _ pass: String) -> String {
+        let addition = pass.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !addition.isEmpty else { return committed }
+        guard !committed.isEmpty else { return addition }
+        return committed + " " + addition
+    }
+
     /// Ends audio capture and waits for the recognizer's final pass.
     func stopListening() {
         guard isListening else { return }
@@ -157,7 +276,14 @@ final class SpeechTranscriber {
         silenceWatcher = nil
         tearDownEngine()
         request?.endAudio()
-        isListening = false
+        // No more rollovers: the last pass has to be allowed to finalize the
+        // session rather than starting another one.
+        isContinuous = false
+
+        // `isListening` deliberately stays true until the final result lands.
+        // The result handler ignores anything arriving after a session ends, and
+        // the whole point of the wait below is to catch that last, better
+        // punctuated pass — so the session is not over yet.
 
         // Give the recognizer a moment to emit its final, punctuated result; if
         // it does not, deliver whatever we already have.
@@ -177,8 +303,11 @@ final class SpeechTranscriber {
         task = nil
         request = nil
         isListening = false
+        isContinuous = false
         silenceWindow = nil
         didDeliverFinalTranscript = true
+        committedTranscript = ""
+        currentPass = ""
         liveTranscript = ""
         if wasRunning { endSession() }
     }
@@ -192,11 +321,16 @@ final class SpeechTranscriber {
         tearDownEngine()
         task?.finish()
         task = nil
+        requestBox.set(nil)
         request = nil
         isListening = false
+        isContinuous = false
         silenceWindow = nil
 
-        let text = liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Whatever the last pass had reached counts too, even if it never got to
+        // report itself as final.
+        commitCurrentPass()
+        let text = committedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         // Delivered before the session is torn down, so a handler can commit the
         // text and then clean up in that order.
         if !text.isEmpty { onFinalTranscript?(text) }
@@ -213,6 +347,7 @@ final class SpeechTranscriber {
     private func tearDownEngine() {
         if engine.isRunning { engine.stop() }
         engine.inputNode.removeTap(onBus: 0)
+        requestBox.set(nil)
     }
 
     private func startSilenceWatcher() {
@@ -384,6 +519,31 @@ final class SpeechTranscriber {
                 }
             }
         }
+    }
+}
+
+/// Hands the current recognition request to the audio tap.
+///
+/// The tap runs on a real-time audio thread, so it can't read main-actor state,
+/// and it outlives any single recognition pass — continuous dictation swaps the
+/// request underneath it every time a pass finalizes. A lock is the honest cost
+/// of that: uncontended it's a few tens of nanoseconds against a buffer that
+/// represents ~23 ms of audio.
+private final class RecognitionRequestBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+
+    func set(_ value: SFSpeechAudioBufferRecognitionRequest?) {
+        lock.lock()
+        defer { lock.unlock() }
+        request = value
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        lock.lock()
+        let current = request
+        lock.unlock()
+        current?.append(buffer)
     }
 }
 
