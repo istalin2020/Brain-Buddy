@@ -48,6 +48,7 @@
 		BB1000000000000000000023 /* BrainBuddyShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BrainBuddyShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB1000000000000000000024 /* BrainBuddyShare.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BrainBuddyShare.entitlements; sourceTree = "<group>"; };
 		BB1000000000000000000025 /* BrainBuddyShare-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "BrainBuddyShare-Info.plist"; sourceTree = "<group>"; };
+		BB1000000000000000000026 /* BrainBuddy-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "BrainBuddy-Info.plist"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -130,6 +131,7 @@
 			isa = PBXGroup;
 			children = (
 				BB1000000000000000000022 /* BrainBuddy.entitlements */,
+				BB1000000000000000000026 /* BrainBuddy-Info.plist */,
 				BB1000000000000000000024 /* BrainBuddyShare.entitlements */,
 				BB1000000000000000000025 /* BrainBuddyShare-Info.plist */,
 			);
@@ -441,19 +443,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Brain Buddy";
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Brain Buddy uses the camera so you can capture photos and scan documents into your second brain.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Brain Buddy uses the microphone to record voice notes and to let you search by talking.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Brain Buddy reads photos you pick so it can extract their text and store them in your second brain.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Brain Buddy transcribes your voice notes and spoken searches so you can find them later.";
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UIBackgroundModes = "audio remote-notification";
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Configuration/BrainBuddy-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -476,19 +467,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Brain Buddy";
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Brain Buddy uses the camera so you can capture photos and scan documents into your second brain.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Brain Buddy uses the microphone to record voice notes and to let you search by talking.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Brain Buddy reads photos you pick so it can extract their text and store them in your second brain.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Brain Buddy transcribes your voice notes and spoken searches so you can find them later.";
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UIBackgroundModes = "audio remote-notification";
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Configuration/BrainBuddy-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

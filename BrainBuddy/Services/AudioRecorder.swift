@@ -53,6 +53,28 @@ final class AudioRecorder {
 
     private let maximumLevelSamples = 48
 
+    // MARK: - Capability
+
+    /// Whether this build actually declares the `audio` background mode.
+    ///
+    /// Read back out of the running bundle rather than trusted from the project
+    /// file. This one plist key is the difference between recording through a
+    /// locked screen and being suspended within seconds of leaving the app, it
+    /// produces no build error when it's wrong, and the failure looks identical
+    /// to a dozen unrelated causes: recording appears to stop and then "resume"
+    /// when you reopen the app, because the process was frozen the whole time.
+    ///
+    /// Surfaced in Settings and on the recording screen so that a build without
+    /// it says so, instead of quietly losing a conversation.
+    static var declaresBackgroundAudio: Bool {
+        guard let modes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] else {
+            // A non-array value means the key was injected as a scalar, which iOS
+            // ignores — so "not declared" is the honest reading.
+            return false
+        }
+        return modes.contains("audio")
+    }
+
     // MARK: - Session configuration
 
     /// Recording route options.
@@ -239,8 +261,15 @@ final class AudioRecorder {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !self.allowsBackgroundRecording else { return }
-                self.pause(reason: "Paused when you left the app — background recording is off in Settings.")
+                guard let self else { return }
+                if !self.allowsBackgroundRecording {
+                    self.pause(reason: "Paused when you left the app — background recording is off in Settings.")
+                } else if !Self.declaresBackgroundAudio {
+                    // Without the capability iOS suspends the process in a moment
+                    // and the recording stops mid-word with no notice. Pausing on
+                    // purpose keeps what we have and gives the user a reason.
+                    self.pause(reason: "Paused: this build can't record off screen — the Background Modes › Audio capability is missing.")
+                }
             }
         })
     }

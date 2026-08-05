@@ -157,6 +157,19 @@ struct SettingsView: View {
     private var recordingSection: some View {
         Section {
             Toggle("Keep recording in the background", isOn: $backgroundRecording)
+
+            // The one thing that can silently defeat the toggle above, reported
+            // from the running bundle rather than assumed.
+            LabeledContent(
+                "Off-screen recording",
+                value: AudioRecorder.declaresBackgroundAudio ? "Allowed" : "Blocked by this build"
+            )
+
+            if !AudioRecorder.declaresBackgroundAudio {
+                Text("The app is missing the Background Modes › Audio capability, so iOS suspends it seconds after it leaves the screen. Add it on the BrainBuddy target under Signing & Capabilities, or check that Configuration/BrainBuddy-Info.plist is the target's Info.plist file.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
         } header: {
             Text("Voice recording")
         } footer: {

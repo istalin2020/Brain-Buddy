@@ -265,7 +265,10 @@ struct VoiceCaptureView: View {
     }
 
     private var backgroundHint: String {
-        recorder.allowsBackgroundRecording
+        guard AudioRecorder.declaresBackgroundAudio else {
+            return "Keep Brain Buddy open — this build is missing the Background Modes › Audio capability, so iOS won't let it record off screen."
+        }
+        return recorder.allowsBackgroundRecording
             ? "You can lock the screen or switch apps — recording keeps going."
             : "Recording pauses if you leave the app. Turn on background recording in Settings to keep going with the screen off."
     }

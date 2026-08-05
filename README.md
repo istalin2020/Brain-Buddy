@@ -77,6 +77,16 @@ Voice capture is built for the long case, not just the ten-second reminder:
   switch apps. A phone call pauses it and it resumes by itself afterwards.
   Settings › Voice recording turns this off, and "off" means *pause* — you never
   lose what was already captured, you just stop capturing while you're away.
+
+  This rests on one plist key, `UIBackgroundModes` containing `audio`, which is
+  why the app ships an explicit `Configuration/BrainBuddy-Info.plist` instead of
+  a generated one: the key has to be an **array**, and a build setting holding a
+  space-separated string is not reliably one. Get it wrong and there is no build
+  error — iOS just suspends the app a few seconds after it leaves the screen, so
+  recording looks like it stopped and then resumed when you came back. Settings ›
+  Voice recording reports whether the running build actually has it, read back
+  from the bundle rather than assumed, and the recorder pauses deliberately
+  rather than being frozen mid-word if it's missing.
 - **Long audio is transcribed in full.** `SFSpeechURLRecognitionRequest` is built
   for utterances and gives up somewhere past a minute, so recordings are sliced
   into 45-second segments and transcribed one at a time, with progress shown. One
@@ -172,7 +182,9 @@ open BrainBuddy.xcodeproj
 Then, before running on a device:
 
 1. Select the **BrainBuddy** target → *Signing & Capabilities*. Set your **Team**
-   on both the **BrainBuddy** and **BrainBuddyShare** targets.
+   on both the **BrainBuddy** and **BrainBuddyShare** targets. Confirm
+   **Background Modes → Audio** is ticked; Settings › Voice recording inside the
+   app tells you whether the build you're running actually has it.
 2. Change the bundle identifiers to something you own. They're currently
    `com.istalin.brainbuddy`, plus `.share` for the extension and `.tests` for the
    test bundle — the extension's identifier must stay prefixed by the app's.
@@ -235,7 +247,7 @@ BrainBuddy/
   Resources/    Assets.xcassets, PrivacyInfo.xcprivacy
 BrainBuddyShare/  ShareViewController — the share extension
 BrainBuddyTests/
-Configuration/  entitlements for both targets + the extension's Info.plist
+Configuration/  entitlements + Info.plist for both targets
 ```
 
 The ranking layer is deliberately free of SwiftData and UIKit: `SearchEngine`
