@@ -42,11 +42,6 @@ struct AskView: View {
             .navigationDestination(for: MemoryItem.self) { item in
                 MemoryDetailView(item: item)
             }
-            .onAppear {
-                transcriber.onFinalTranscript = { text in
-                    ask(text)
-                }
-            }
             .onDisappear {
                 transcriber.cancelListening()
                 services.speaker.stop()
@@ -251,6 +246,13 @@ struct AskView: View {
         isFieldFocused = false
         query = ""
         clearResults()
+
+        // Assigned here rather than when the view appears: the capture editor
+        // dictates through the same recognizer, and whichever screen starts a
+        // session owns its result.
+        transcriber.onFinalTranscript = { text in ask(text) }
+        transcriber.onSessionEnd = nil
+
         Task {
             do {
                 try await transcriber.startListening()

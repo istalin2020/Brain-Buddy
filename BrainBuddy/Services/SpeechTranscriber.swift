@@ -33,17 +33,33 @@ final class SpeechTranscriber {
     private(set) var liveTranscript = ""
 
     /// Called once with the final text when a dictation session ends.
+    ///
+    /// Two screens dictate through this one recognizer — the Ask field and the
+    /// capture editor — so both handlers are assigned at *start of listening*
+    /// rather than when a view appears. Otherwise a tab switch silently steals
+    /// the other screen's result.
     var onFinalTranscript: ((String) -> Void)?
+
+    /// Called when a session ends however it ended: final text delivered, no
+    /// speech recognized, or cancelled outright. Callers that hold state for the
+    /// duration of a session need a signal that fires on every path, not only
+    /// the happy one.
+    var onSessionEnd: (() -> Void)?
 
     /// Stop listening automatically after this much silence. `nil` disables it.
     var autoStopAfterSilence: TimeInterval? = 2.5
+
+    /// The window in force for the session currently running.
+    private var silenceWindow: TimeInterval?
 
     private let engine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var silenceWatcher: Task<Void, Never>?
     private var lastTranscriptChange = Date()
-    private var didDeliverFinalTranscript = false
+    /// Starts `true`: before any session has run there is nothing left to
+    /// deliver, so an early `cancelListening` has no session to end.
+    private var didDeliverFinalTranscript = true
 
     private let recognizer: SFSpeechRecognizer? = SFSpeechRecognizer(locale: Locale.current)
         ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -67,7 +83,11 @@ final class SpeechTranscriber {
 
     // MARK: - Live dictation
 
-    func startListening() async throws {
+    /// - Parameter autoStop: whether a pause should end the session. A spoken
+    ///   *question* ends when you stop talking, so Ask leaves this on. Dictating
+    ///   a *note* doesn't — pausing to think is part of composing one — so the
+    ///   capture editor turns it off rather than cutting the user off mid-thought.
+    func startListening(autoStop: Bool = true) async throws {
         guard !isListening else { return }
         guard await Self.requestAuthorization() else { throw TranscriberError.notAuthorized }
         guard await AudioRecorder.requestPermission() else { throw TranscriberError.notAuthorized }
@@ -126,6 +146,7 @@ final class SpeechTranscriber {
         }
 
         isListening = true
+        silenceWindow = autoStop ? autoStopAfterSilence : nil
         startSilenceWatcher()
     }
 
@@ -147,6 +168,7 @@ final class SpeechTranscriber {
     }
 
     func cancelListening() {
+        let wasRunning = isListening || !didDeliverFinalTranscript
         silenceWatcher?.cancel()
         silenceWatcher = nil
         tearDownEngine()
@@ -155,8 +177,10 @@ final class SpeechTranscriber {
         task = nil
         request = nil
         isListening = false
+        silenceWindow = nil
         didDeliverFinalTranscript = true
         liveTranscript = ""
+        if wasRunning { endSession() }
     }
 
     private func finishListening() {
@@ -170,9 +194,20 @@ final class SpeechTranscriber {
         task = nil
         request = nil
         isListening = false
+        silenceWindow = nil
 
         let text = liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Delivered before the session is torn down, so a handler can commit the
+        // text and then clean up in that order.
         if !text.isEmpty { onFinalTranscript?(text) }
+        endSession()
+    }
+
+    private func endSession() {
+        let handler = onSessionEnd
+        onFinalTranscript = nil
+        onSessionEnd = nil
+        handler?()
     }
 
     private func tearDownEngine() {
@@ -181,7 +216,7 @@ final class SpeechTranscriber {
     }
 
     private func startSilenceWatcher() {
-        guard let window = autoStopAfterSilence else { return }
+        guard let window = silenceWindow else { return }
         silenceWatcher = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 300_000_000)

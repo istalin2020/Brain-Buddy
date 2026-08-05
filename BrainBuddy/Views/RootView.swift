@@ -37,12 +37,13 @@ struct RootView: View {
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(Tab.settings)
         }
-        .onChange(of: selection) { _, newValue in
-            // Leaving the Ask tab should silence a spoken answer immediately.
-            if newValue != .ask {
-                services.speaker.stop()
-                services.transcriber.cancelListening()
-            }
+        .onChange(of: selection) { _, _ in
+            // A spoken answer and an open microphone both belong to the screen
+            // you were on. Two tabs dictate through one recognizer — Ask and the
+            // capture editor — so ending the session on *any* tab change is what
+            // keeps ownership of it unambiguous.
+            services.speaker.stop()
+            services.transcriber.cancelListening()
         }
         // Anything shared from another app lands in the App Group inbox; import
         // it on launch and on every return to the foreground, which is when a

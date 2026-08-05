@@ -15,6 +15,7 @@ Built with SwiftUI + SwiftData (CloudKit mirroring), iOS 17+.
 | Input | How it's handled |
 | --- | --- |
 | **Text** | Typed straight into the capture box. `#hashtags` become tags automatically. |
+| **Dictation** | A mic inside the capture box types what you say into the note as you say it, so you can speak a thought and still edit it before saving. Distinct from a voice note: this is a keyboard, that keeps the recording. Pausing to think doesn't end it — only tapping the mic does. |
 | **Voice** | Recorded to AAC, saved immediately, then transcribed with `SFSpeechRecognizer` (on-device when available). Keeps recording with the screen off, so you can capture a whole discussion. Afterwards you get the transcript, and can turn it into a saved summary. |
 | **Image** | Photo library or camera. Text is pulled out with Vision OCR so photos are searchable by their contents. |
 | **Scan** | VisionKit's document scanner — edge detection and perspective correction, then OCR per page. |
