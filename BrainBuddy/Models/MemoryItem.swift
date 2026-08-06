@@ -22,6 +22,15 @@ enum MemoryKind: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    /// Longer form for places that name where a line came from, where "Voice"
+    /// on its own reads like a fragment.
+    var sourceLabel: String {
+        switch self {
+        case .voice: return "Voice note"
+        default: return title
+        }
+    }
+
     var systemImage: String {
         switch self {
         case .note: return "text.alignleft"

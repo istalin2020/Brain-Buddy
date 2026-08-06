@@ -103,6 +103,115 @@ final class BriefBuilderTests: XCTestCase {
         XCTAssertTrue(schedule[0].text.contains("Kickoff"), "earliest first")
     }
 
+    // MARK: - Bare clock times
+
+    /// `NSDataDetector` resolves a bare time against the *actual* present moment,
+    /// not against an injected date, so these have to run against the real today
+    /// or the day filter would reject the match before the rule under test is
+    /// ever reached.
+    private var realToday: Date { calendar.startOfDay(for: Date()) }
+
+    private func recentSource(text: String, daysAgo: Int) -> BriefSource {
+        BriefSource(
+            identifier: UUID(),
+            title: "A note",
+            text: text,
+            summary: "",
+            createdAt: calendar.date(byAdding: .day, value: -daysAgo, to: realToday)!,
+            kindTitle: "Note"
+        )
+    }
+
+    /// An old note mentioning `12:05` used to become an appointment today.
+    func testABareTimeInAnOldNoteIsNotTodaysSchedule() {
+        let candidates = BriefBuilder.build(
+            for: realToday,
+            from: [recentSource(text: "Printed at 12:05 on the report footer.", daysAgo: 8)],
+            calendar: calendar
+        )
+        XCTAssertTrue(candidates.filter { $0.kind == .schedule }.isEmpty)
+    }
+
+    /// A numeric range reads as a clock time to the detector — this is what put
+    /// "2 - 2.54 at 2:00 PM" in a brief.
+    func testANumericRangeIsNotAnAppointment() {
+        let candidates = BriefBuilder.build(
+            for: realToday,
+            from: [recentSource(text: "Reference range 2 - 2.54 for that panel.", daysAgo: 3)],
+            calendar: calendar
+        )
+        XCTAssertTrue(candidates.filter { $0.kind == .schedule }.isEmpty)
+    }
+
+    /// But a time in something written today does mean today.
+    func testABareTimeInTodaysNoteIsKept() {
+        let candidates = BriefBuilder.build(
+            for: realToday,
+            from: [recentSource(text: "Call the site office at 4:30 PM.", daysAgo: 0)],
+            calendar: calendar
+        )
+        XCTAssertEqual(candidates.filter { $0.kind == .schedule }.count, 1)
+    }
+
+    func testNamesADayRecognizesRealDayReferences() {
+        XCTAssertTrue(BriefBuilder.namesADay("August 5, 2026 at 4:00 PM"))
+        XCTAssertTrue(BriefBuilder.namesADay("tomorrow at 9"))
+        XCTAssertTrue(BriefBuilder.namesADay("Tuesday morning"))
+        XCTAssertTrue(BriefBuilder.namesADay("29/07/2026"))
+        XCTAssertTrue(BriefBuilder.namesADay("2026-08-06 10:30"))
+    }
+
+    func testNamesADayRejectsClockTimesAndNumbers() {
+        XCTAssertFalse(BriefBuilder.namesADay("12:05"))
+        XCTAssertFalse(BriefBuilder.namesADay("2 - 2.54"))
+        XCTAssertFalse(BriefBuilder.namesADay("4:30 PM"))
+        XCTAssertFalse(BriefBuilder.namesADay("10:30:00"))
+    }
+
+    // MARK: - Where a line came from
+
+    /// A one-sentence note is titled after its own first line, so using the title
+    /// as the subtitle printed the same sentence twice.
+    func testDetailDoesNotRepeatTheLine() throws {
+        let sentence = "I have to complete my EOT submission for M526 Project"
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [BriefSource(
+                identifier: UUID(),
+                title: sentence,
+                text: sentence,
+                summary: "",
+                createdAt: calendar.date(byAdding: .day, value: -1, to: today)!,
+                kindTitle: "Voice note"
+            )],
+            calendar: calendar
+        )
+
+        let task = try XCTUnwrap(candidates.first { $0.kind == .task })
+        XCTAssertNotEqual(task.detail, sentence)
+        XCTAssertTrue(task.detail.contains("Voice note"), "got “\(task.detail)”")
+        XCTAssertTrue(task.detail.contains("yesterday"), "got “\(task.detail)”")
+    }
+
+    /// When the title genuinely says something else, it's the more useful subtitle.
+    func testDetailKeepsATitleThatAddsInformation() throws {
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [BriefSource(
+                identifier: UUID(),
+                title: "Site meeting with PCH",
+                text: "Lots of ground covered. I have to close the approval this week.",
+                summary: "",
+                createdAt: today,
+                kindTitle: "Voice note"
+            )],
+            calendar: calendar
+        )
+
+        let task = try XCTUnwrap(candidates.first { $0.kind == .task })
+        XCTAssertEqual(task.detail, "Site meeting with PCH")
+    }
+
     // MARK: - Tasks
 
     func testCommitmentSentencesBecomeTasks() {
@@ -213,6 +322,21 @@ final class BriefBuilderTests: XCTestCase {
 
     func testEmptyLibraryProducesNothing() {
         XCTAssertTrue(BriefBuilder.build(for: today, from: [], calendar: calendar).isEmpty)
+    }
+
+    /// A scanned document reaches the builder with no authored text and no saved
+    /// summary — `BriefService` puts nothing else in — and must produce no lines.
+    /// Its printed timestamps are not a calendar and it contains no commitments.
+    func testASourceWithNothingAuthoredProducesNothing() {
+        let scanned = BriefSource(
+            identifier: UUID(),
+            title: "DEPARTMENT OF LABORATORY MEDICINE",
+            text: "",
+            summary: "",
+            createdAt: today,
+            kindTitle: "Document"
+        )
+        XCTAssertTrue(BriefBuilder.build(for: today, from: [scanned], calendar: calendar).isEmpty)
     }
 
     func testBlankSourcesProduceNothing() {

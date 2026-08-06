@@ -94,8 +94,9 @@ enum BriefBuilder {
         var bySentence: [String: (date: Date, candidate: BriefCandidate)] = [:]
 
         for source in sources {
-            let body = source.text.isEmpty ? source.title : source.text
+            let body = source.text
             guard !body.isEmpty else { continue }
+            let writtenToday = calendar.isDate(source.createdAt, inSameDayAs: dayStart)
 
             let range = NSRange(body.startIndex..<body.endIndex, in: body)
             let matches = detector.matches(in: body, options: [], range: range)
@@ -107,6 +108,13 @@ enum BriefBuilder {
             for match in matches {
                 guard let date = match.date, calendar.isDate(date, inSameDayAs: dayStart) else { continue }
                 guard let matchRange = Range(match.range, in: body) else { continue }
+
+                // A bare clock time is resolved against *now*, so "12:05" written
+                // at any point in the past becomes an appointment for today. That
+                // only makes sense for something written today — "call at 4" in
+                // this morning's note means this afternoon. In anything older, a
+                // time with no day attached to it is just a number.
+                guard Self.namesADay(String(body[matchRange])) || writtenToday else { continue }
 
                 let sentence = sentenceContaining(matchRange, in: body, ranges: sentenceRanges)
                 guard !sentence.isEmpty else { continue }
@@ -121,7 +129,7 @@ enum BriefBuilder {
                 let candidate = BriefCandidate(
                     kind: .schedule,
                     text: sentence,
-                    detail: source.title,
+                    detail: detail(for: source, line: sentence, on: dayStart),
                     scheduledAt: isTimed ? date : nil,
                     sourceIdentifier: source.identifier
                 )
@@ -145,6 +153,66 @@ enum BriefBuilder {
             }
             .prefix(maximumScheduleItems)
             .map(\.candidate)
+    }
+
+    // MARK: - Where a line came from
+
+    /// The subtitle under a brief line: what it came from, not the line again.
+    ///
+    /// A note's title is derived from its own first line, so for a one-sentence
+    /// capture — which most voice memos and quick notes are — using the title
+    /// printed the same sentence twice, once in grey. When the title adds nothing,
+    /// name the source and when it was captured instead: *Voice note · yesterday*
+    /// tells you something the line doesn't.
+    private static func detail(for source: BriefSource, line: String, on day: Date) -> String {
+        let title = source.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let when = AnswerComposer.relativeDescription(for: source.createdAt, now: day)
+
+        guard !title.isEmpty, !restates(title, line) else {
+            return "\(source.kindTitle) · \(when)"
+        }
+        return title
+    }
+
+    /// Whether a title says the same thing as the line, allowing for the
+    /// truncation `suggestedTitle` applies at 70 characters.
+    private static func restates(_ title: String, _ line: String) -> Bool {
+        let titleKey = BriefEntry.dedupeKey(for: title)
+        let lineKey = BriefEntry.dedupeKey(for: line)
+        guard !titleKey.isEmpty, !lineKey.isEmpty else { return true }
+        return lineKey.hasPrefix(titleKey) || titleKey.hasPrefix(lineKey)
+    }
+
+    /// Words that name a day rather than a time of day.
+    private static let dayWords: Set<String> = [
+        "today", "tonight", "tomorrow", "tmrw", "yesterday",
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+        "mon", "tue", "tues", "wed", "weds", "thu", "thur", "thurs", "fri", "sat", "sun",
+        "january", "february", "march", "april", "may", "june", "july", "august",
+        "september", "october", "november", "december",
+        "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec"
+    ]
+
+    /// Whether a detected match actually names a day, rather than only a clock
+    /// time — a weekday, a month, a `29/07/2026`, or a word like "tomorrow".
+    ///
+    /// Worth being strict about: `NSDataDetector` resolves a bare time against
+    /// the present moment, so it will happily report `12:05` in a document
+    /// printed last month as an event today. It reads a numeric range like
+    /// `2 - 2.54` as two o'clock for the same reason.
+    static func namesADay(_ matched: String) -> Bool {
+        let lowered = matched.lowercased()
+        let words = Set(
+            lowered
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { !$0.isEmpty }
+        )
+        if !words.isDisjoint(with: dayWords) { return true }
+        // 29/07/2026, 2026-08-06, 6.8.26 — two separators, so not a clock time.
+        return lowered.range(
+            of: #"\d{1,4}[./-]\d{1,2}[./-]\d{2,4}"#,
+            options: .regularExpression
+        ) != nil
     }
 
     /// The sentence a detected date sits inside, so the brief line reads as
@@ -191,7 +259,7 @@ enum BriefBuilder {
                 candidates.append(BriefCandidate(
                     kind: .task,
                     text: line,
-                    detail: source.title,
+                    detail: detail(for: source, line: line, on: dayStart),
                     scheduledAt: nil,
                     sourceIdentifier: source.identifier
                 ))
@@ -221,7 +289,7 @@ enum BriefBuilder {
                 candidates.append(BriefCandidate(
                     kind: .point,
                     text: line,
-                    detail: source.title,
+                    detail: detail(for: source, line: line, on: dayStart),
                     scheduledAt: nil,
                     sourceIdentifier: source.identifier
                 ))

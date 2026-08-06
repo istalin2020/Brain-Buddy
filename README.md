@@ -45,9 +45,23 @@ built from what you already captured:
 
 | Section | Where it comes from |
 | --- | --- |
-| **Today's schedule** | Dates detected anywhere in your notes that land on today, quoted as the sentence you wrote them in. A note from last month saying "quarterly review on the 14th" is exactly what this is for, so schedule detection ignores how old the capture is. |
+| **Today's schedule** | Dates that land on today, quoted as the sentence you wrote them in. A note from last month saying "quarterly review on the 14th" is exactly what this is for, so this ignores how old the capture is. |
 | **Tasks** | Sentences carrying a commitment — *have to*, *will*, *should*, *let's*, *priority* — from the last two weeks. The same cue detection the summarizer uses. |
 | **Key points** | Key points out of discussions you summarized in the last week. |
+
+**Only what you said feeds the brief.** Text a machine extracted — OCR off a
+photo, a PDF's text layer — is reference material, not a commitment. A scanned
+lab report contains no tasks, and its printed timestamps are not your calendar;
+reading them as one filled a brief with rows like *"2 - 2.54" at 2:00 PM*. So a
+line can only come from what you typed, dictated or spoke, or from a summary you
+reviewed and saved. To get something out of a document and into your brief, write
+it down or summarize the document.
+
+Date detection is correspondingly strict about **bare clock times**.
+`NSDataDetector` resolves a time with no day attached against the present moment,
+so `12:05` in anything at all reads as an appointment today. A time only counts if
+the match names a day too — a weekday, a month, `29/07/2026`, "tomorrow" — or if
+the note itself was written today, where "call at 4" plainly means this afternoon.
 
 Every line has a circle you tap to **close** it, or leave open. Closing survives
 relaunching and syncs to your other devices, because a brief you can't tick off

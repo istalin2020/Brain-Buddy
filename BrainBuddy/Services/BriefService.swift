@@ -56,14 +56,27 @@ final class BriefService {
             return 0
         }
 
-        let sources = memories.map { item in
-            BriefSource(
+        // Only what you actually said feeds a brief.
+        //
+        // `extractedText` — OCR off a photo, a PDF's text layer — is reference
+        // material, not a commitment. A scanned lab report contains no tasks, and
+        // its printed timestamps are not your calendar; reading them as one
+        // produced a brief full of "2 - 2.54 at 2:00 PM". So a line can only come
+        // from text you typed, dictated or spoke, or from a summary you reviewed
+        // and pressed Save on. To get something out of a document and into your
+        // brief, write it down or summarize the document.
+        let sources = memories.compactMap { item -> BriefSource? in
+            let authored = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let summary = item.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !authored.isEmpty || !summary.isEmpty else { return nil }
+
+            return BriefSource(
                 identifier: item.identifier,
                 title: item.displayTitle,
-                text: item.text.isEmpty ? item.extractedText : item.text,
-                summary: item.summary,
+                text: authored,
+                summary: summary,
                 createdAt: item.createdAt,
-                kindTitle: item.kind.title
+                kindTitle: item.kind.sourceLabel
             )
         }
 
