@@ -150,10 +150,20 @@ struct TodayView: View {
             .accessibilityLabel(entry.isClosed ? "Reopen" : "Close")
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(entry.text)
-                    .font(.callout)
+                // A short subject leads, so the brief can be read in a glance.
+                Text(entry.subject)
+                    .font(.callout.weight(entry.headline.isEmpty ? .regular : .medium))
                     .strikethrough(entry.isClosed, color: .secondary)
                     .foregroundStyle(entry.isClosed ? .secondary : .primary)
+
+                // The exact words, kept underneath, because the subject is derived
+                // and the quote is what was actually said.
+                if let supporting = entry.supportingText {
+                    Text(supporting)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
 
                 HStack(spacing: 6) {
                     if let time = entry.scheduledTimeLabel {

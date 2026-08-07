@@ -49,6 +49,12 @@ built from what you already captured:
 | **Tasks** | Sentences carrying a commitment — *have to*, *will*, *should*, *let's*, *priority* — from the last two weeks. The same cue detection the summarizer uses. |
 | **Key points** | Key points out of discussions you summarized in the last week. |
 
+**Long lines get a subject.** A quoted sentence of eighty words is accurate and
+useless in something you read standing up, so a long brief line is headed by a
+short subject with the exact quote underneath. The subject is derived the same way
+a voice note's title is — see below — and is never generated, so it can't claim
+the recording was about something nobody mentioned.
+
 **Only what you said feeds the brief.** Text a machine extracted — OCR off a
 photo, a PDF's text layer — is reference material, not a commitment. A scanned
 lab report contains no tasks, and its printed timestamps are not your calendar;
@@ -116,6 +122,15 @@ Voice capture is built for the long case, not just the ten-second reminder:
     multi-speaker recording; no amount of segmenting fixes that. **Higher accuracy
     transcription** uses Apple's speech servers instead, and is the one thing in
     this app that sends your data anywhere. Off by default, named plainly.
+- **A recording gets a subject, not its first sentence.** Transcribed speech has
+  no title in it, and taking the opening seventy characters names a memory after
+  its throat-clearing — *"I would like to know when I we are going to leave from
+  home and we…"*. `Headline` derives one instead, in order: a **commitment** with
+  its scaffolding stripped ("Close the excess tower material approval from PCH"),
+  otherwise the **recurring subjects** ("Home, gold, place"), otherwise the most
+  informative sentence. Still extractive — words that were said, minus the filler
+  in front of them. A title you typed always wins over a derived one, and you can
+  always edit it.
 - **Playback has a real timeline.** Drag to scrub, ±15 seconds, `h:mm:ss` past the
   hour. Transcription will always get some of a long conversation wrong, so the
   recording is the source of truth — being able to jump to the part you

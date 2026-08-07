@@ -17,6 +17,8 @@ struct BriefSource {
 struct BriefCandidate: Equatable {
     let kind: BriefEntryKind
     let text: String
+    /// Short subject for a long line; empty when the line is its own heading.
+    let headline: String
     let detail: String
     let scheduledAt: Date?
     let sourceIdentifier: UUID?
@@ -129,6 +131,7 @@ enum BriefBuilder {
                 let candidate = BriefCandidate(
                     kind: .schedule,
                     text: sentence,
+                    headline: headline(for: sentence),
                     detail: detail(for: source, line: sentence, on: dayStart),
                     scheduledAt: isTimed ? date : nil,
                     sourceIdentifier: source.identifier
@@ -153,6 +156,21 @@ enum BriefBuilder {
             }
             .prefix(maximumScheduleItems)
             .map(\.candidate)
+    }
+
+    // MARK: - Subject lines
+
+    /// A short subject for a line that is too long to scan.
+    ///
+    /// A brief is read standing up, in a few seconds. A quoted sentence of
+    /// eighty-plus words is accurate and useless at that length, so long lines
+    /// get a heading and keep the quote underneath. Short lines get nothing —
+    /// two near-identical strings stacked on each other is worse than one.
+    private static func headline(for line: String) -> String {
+        guard line.count > Headline.maximumLength + 8 else { return "" }
+        let derived = Headline.from(line, fallback: "")
+        guard !derived.isEmpty, derived != line else { return "" }
+        return derived
     }
 
     // MARK: - Where a line came from
@@ -259,6 +277,7 @@ enum BriefBuilder {
                 candidates.append(BriefCandidate(
                     kind: .task,
                     text: line,
+                    headline: headline(for: line),
                     detail: detail(for: source, line: line, on: dayStart),
                     scheduledAt: nil,
                     sourceIdentifier: source.identifier
@@ -289,6 +308,7 @@ enum BriefBuilder {
                 candidates.append(BriefCandidate(
                     kind: .point,
                     text: line,
+                    headline: headline(for: line),
                     detail: detail(for: source, line: line, on: dayStart),
                     scheduledAt: nil,
                     sourceIdentifier: source.identifier

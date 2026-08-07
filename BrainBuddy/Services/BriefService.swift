@@ -93,6 +93,7 @@ final class BriefService {
                 day: day,
                 kind: candidate.kind,
                 text: candidate.text,
+                headline: candidate.headline,
                 detail: candidate.detail,
                 scheduledAt: candidate.scheduledAt,
                 sourceIdentifier: candidate.sourceIdentifier,

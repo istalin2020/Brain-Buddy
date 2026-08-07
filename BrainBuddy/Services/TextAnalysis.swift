@@ -6,25 +6,34 @@ import NaturalLanguage
 enum TextAnalysis {
     /// A short title for something the user never titled.
     ///
-    /// Prefers a genuine first line (people naturally write one), otherwise
-    /// falls back to the first sentence, trimmed to a readable length.
+    /// A deliberate first line wins, because people who type a note naturally
+    /// write one and it is always a better title than anything derived. Failing
+    /// that — a wall of transcribed speech, which has no first line — the title
+    /// is derived from what the content is *about*. See `Headline`: the first
+    /// seventy characters of a recording are its throat-clearing, and using them
+    /// produced titles like "I would like to know when I we are going to leave
+    /// from home and we…".
     static func suggestedTitle(from text: String, fallback: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return fallback }
 
-        let firstLine = trimmed
+        let lines = trimmed
             .components(separatedBy: .newlines)
-            .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })?
-            .trimmingCharacters(in: .whitespaces) ?? trimmed
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
 
-        let candidate = firstLine.count <= 70
-            ? firstLine
-            : (Tokenizer.sentences(in: firstLine).first ?? firstLine)
+        // A short opening line, with more text under it, is a title someone wrote.
+        if let firstLine = lines.first, firstLine.count <= 70, lines.count > 1 || trimmed.count <= 70 {
+            return firstLine
+        }
 
-        if candidate.count <= 70 { return candidate }
+        let headline = Headline.from(trimmed, fallback: "")
+        if !headline.isEmpty { return headline }
 
-        // Cut on a word boundary rather than mid-word.
-        let cut = candidate.prefix(70)
+        // Nothing derivable: cut the opening on a word boundary rather than
+        // mid-word, which is what this always used to do.
+        guard trimmed.count > 70 else { return trimmed }
+        let cut = trimmed.prefix(70)
         if let lastSpace = cut.lastIndex(of: " ") {
             return String(cut[cut.startIndex..<lastSpace]) + "…"
         }

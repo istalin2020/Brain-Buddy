@@ -52,6 +52,11 @@ final class BriefEntry {
     /// The line itself — a sentence quoted from what you captured.
     var text: String = ""
 
+    /// A short subject for a long line, so the brief can be read at a glance
+    /// rather than at paragraph length. Empty when `text` is already short enough
+    /// to be its own heading.
+    var headline: String = ""
+
     /// Where it came from, e.g. the title of the note it was quoted out of.
     var detail: String = ""
 
@@ -71,6 +76,7 @@ final class BriefEntry {
         day: Date,
         kind: BriefEntryKind,
         text: String,
+        headline: String = "",
         detail: String = "",
         scheduledAt: Date? = nil,
         sourceIdentifier: UUID? = nil,
@@ -80,6 +86,7 @@ final class BriefEntry {
         self.day = day
         self.kindRaw = kind.rawValue
         self.text = text
+        self.headline = headline
         self.detail = detail
         self.scheduledAt = scheduledAt
         self.sourceIdentifier = sourceIdentifier
@@ -101,6 +108,13 @@ extension BriefEntry {
     static func dedupeKey(for text: String) -> String {
         Tokenizer.tokens(in: text).joined(separator: " ")
     }
+
+    /// What the row leads with.
+    var subject: String { headline.isEmpty ? text : headline }
+
+    /// The full quote, shown under the subject only when it says more than the
+    /// subject already does.
+    var supportingText: String? { headline.isEmpty ? nil : text }
 
     var scheduledTimeLabel: String? {
         guard let scheduledAt else { return nil }
