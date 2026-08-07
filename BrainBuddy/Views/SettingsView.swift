@@ -16,6 +16,8 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.morningBrief) private var morningBrief = true
     @AppStorage(PreferenceKey.morningBriefHour) private var briefHour = 8
     @AppStorage(PreferenceKey.morningBriefMinute) private var briefMinute = 0
+    @AppStorage(PreferenceKey.transcriptionLocale) private var transcriptionLocale = ""
+    @AppStorage(PreferenceKey.serverTranscription) private var serverTranscription = false
 
     @State private var reindexProgress: Double?
     @State private var pendingSharedItems = 0
@@ -26,6 +28,7 @@ struct SettingsView: View {
                 syncSection
                 briefSection
                 searchSection
+                transcriptionSection
                 recordingSection
                 sharingSection
                 storageSection
@@ -152,6 +155,41 @@ struct SettingsView: View {
                       ? "Meaning matching uses Apple's on-device language models, so questions work even when you don't remember your exact words. Nothing is sent anywhere."
                       : "Only keyword matching is used. Faster on very large libraries, but you'll need to recall the wording you saved."))
         }
+    }
+
+    private var transcriptionSection: some View {
+        Section {
+            Picker("Spoken language", selection: $transcriptionLocale) {
+                Text("Device language").tag("")
+                ForEach(Self.recognitionLocales, id: \.identifier) { locale in
+                    Text(Self.name(of: locale)).tag(locale.identifier)
+                }
+            }
+            .pickerStyle(.navigationLink)
+
+            Toggle("Higher accuracy transcription", isOn: $serverTranscription)
+        } header: {
+            Text("Transcription")
+        } footer: {
+            Text("""
+            Pick the language you actually speak in recordings. A recognizer set to \
+            the wrong one doesn't fail — it spells what it hears as words from the \
+            language it expects, which reads like a transcript and means nothing. If \
+            you mix English into another language, the regional variant usually wins.
+
+            \(serverTranscription
+              ? "Higher accuracy sends the audio to Apple's speech servers. It is much better on long, multi-speaker recordings — and it is the one thing in this app that leaves your device."
+              : "Transcription runs entirely on this iPhone. That keeps recordings private, but the on-device model is built for short dictation and struggles with long conversations. Turn on higher accuracy to use Apple's servers instead.")
+            """)
+        }
+    }
+
+    /// Built once: the list runs to dozens of entries and never changes at runtime.
+    private static let recognitionLocales = SpeechTranscriber.supportedLocales()
+
+    private static func name(of locale: Locale) -> String {
+        let described = Locale.current.localizedString(forIdentifier: locale.identifier)
+        return described ?? locale.identifier
     }
 
     private var recordingSection: some View {

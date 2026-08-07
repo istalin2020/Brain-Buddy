@@ -75,8 +75,75 @@ final class SpeechTranscriber {
     /// can't spin restarting forever.
     private var consecutiveRestartFailures = 0
 
-    private let recognizer: SFSpeechRecognizer? = SFSpeechRecognizer(locale: Locale.current)
-        ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    /// Rebuilt only when the language preference changes.
+    private var cachedRecognizer: (identifier: String, recognizer: SFSpeechRecognizer)?
+
+    private var recognizer: SFSpeechRecognizer? {
+        let locale = Self.preferredLocale
+        if let cached = cachedRecognizer, cached.identifier == locale.identifier {
+            return cached.recognizer
+        }
+        guard let built = Self.makeRecognizer(for: locale) else { return nil }
+        cachedRecognizer = (locale.identifier, built)
+        return built
+    }
+
+    // MARK: - Language and accuracy
+
+    /// The language to recognize in.
+    ///
+    /// Defaults to the device language, which is wrong often enough to be worth a
+    /// setting: a recognizer told to expect British English will transcribe Tamil
+    /// or Hindi phonetically into English words, producing text that looks like a
+    /// transcript and means nothing. For code-switched speech — English technical
+    /// vocabulary inside another language, which is how a great many people
+    /// actually talk — picking the regional variant (`en-IN`, `ta-IN`) is the
+    /// single biggest thing that improves the result.
+    nonisolated static var preferredLocale: Locale {
+        let identifier = UserDefaults.standard.string(forKey: PreferenceKey.transcriptionLocale) ?? ""
+        return identifier.isEmpty ? Locale.current : Locale(identifier: identifier)
+    }
+
+    /// Whether recognition may leave the device.
+    ///
+    /// The on-device model is built for short commands and dictation. On a long
+    /// multi-speaker recording it degrades badly, and no amount of segmenting
+    /// fixes that. Apple's server model is substantially better, at the cost of
+    /// the recording leaving the phone — so it is opt-in, and named plainly.
+    nonisolated static var allowsServerTranscription: Bool {
+        UserDefaults.standard.bool(forKey: PreferenceKey.serverTranscription)
+    }
+
+    /// Languages this device can recognize, for the Settings picker.
+    nonisolated static func supportedLocales() -> [Locale] {
+        SFSpeechRecognizer.supportedLocales()
+            .map { Locale(identifier: $0.identifier) }
+            .sorted {
+                let left = Locale.current.localizedString(forIdentifier: $0.identifier) ?? $0.identifier
+                let right = Locale.current.localizedString(forIdentifier: $1.identifier) ?? $1.identifier
+                return left == right ? $0.identifier < $1.identifier : left < right
+            }
+    }
+
+    nonisolated private static func makeRecognizer(for locale: Locale) -> SFSpeechRecognizer? {
+        SFSpeechRecognizer(locale: locale)
+            ?? SFSpeechRecognizer(locale: Locale.current)
+            ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    }
+
+    /// Applies the accuracy and language preferences to one request.
+    nonisolated private static func configure(_ request: SFSpeechRecognitionRequest, using recognizer: SFSpeechRecognizer) {
+        // `false` lets the system pick, which means the server model when it can
+        // reach it. Only forced on-device when the user hasn't opted in.
+        request.requiresOnDeviceRecognition = allowsServerTranscription
+            ? false
+            : recognizer.supportsOnDeviceRecognition
+        // Continuous speech rather than a short command or a search query; the
+        // hint measurably changes how the model segments what it hears.
+        request.taskHint = .dictation
+        // Long transcripts are read, not heard. Without punctuation they're a wall.
+        request.addsPunctuation = true
+    }
 
     // MARK: - Authorization
 
@@ -179,12 +246,7 @@ final class SpeechTranscriber {
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        // Prefer the on-device model when the OS has one: nothing you say leaves
-        // the phone, and it keeps working without a connection.
-        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
-        // Dictated notes are read back later; unpunctuated text is much harder to
-        // reread than to hear.
-        request.addsPunctuation = true
+        Self.configure(request, using: recognizer)
 
         self.request = request
         requestBox.set(request)
@@ -489,20 +551,17 @@ final class SpeechTranscriber {
         return output
     }
 
-    private static func makeRecognizer() throws -> SFSpeechRecognizer {
-        let recognizer = SFSpeechRecognizer(locale: Locale.current)
-            ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-        guard let recognizer, recognizer.isAvailable else { throw TranscriberError.recognizerUnavailable }
+    nonisolated private static func makeRecognizer() throws -> SFSpeechRecognizer {
+        guard let recognizer = makeRecognizer(for: preferredLocale), recognizer.isAvailable else {
+            throw TranscriberError.recognizerUnavailable
+        }
         return recognizer
     }
 
     private static func recognize(fileAt url: URL, using recognizer: SFSpeechRecognizer) async throws -> String {
         let request = SFSpeechURLRecognitionRequest(url: url)
         request.shouldReportPartialResults = false
-        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
-        // Punctuation is what makes a long transcript readable — and it's what
-        // lets the summarizer find sentence boundaries at all.
-        request.addsPunctuation = true
+        configure(request, using: recognizer)
 
         return try await withCheckedThrowingContinuation { continuation in
             // `recognitionTask` can call back more than once; make sure the

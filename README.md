@@ -105,6 +105,21 @@ Voice capture is built for the long case, not just the ten-second reminder:
   for utterances and gives up somewhere past a minute, so recordings are sliced
   into 45-second segments and transcribed one at a time, with progress shown. One
   unintelligible minute is skipped rather than losing the other thirty-nine.
+- **You choose the spoken language, and how accurate to be.** Settings ›
+  Transcription. Both matter more than they sound:
+  - A recognizer set to the wrong language doesn't fail, it *spells what it hears*
+    as words from the language it expects. Tamil through an `en-GB` recognizer
+    comes back as confident English nonsense. If you mix English into another
+    language — as most bilingual speakers do — the regional variant (`en-IN`,
+    `ta-IN`) is usually the best single choice.
+  - The on-device model is built for short dictation and degrades badly on a long
+    multi-speaker recording; no amount of segmenting fixes that. **Higher accuracy
+    transcription** uses Apple's speech servers instead, and is the one thing in
+    this app that sends your data anywhere. Off by default, named plainly.
+- **Playback has a real timeline.** Drag to scrub, ±15 seconds, `h:mm:ss` past the
+  hour. Transcription will always get some of a long conversation wrong, so the
+  recording is the source of truth — being able to jump to the part you
+  half-remember is what makes it checkable.
 - **You see the transcript before you leave.** The recording is saved *first* —
   a crash or a failed transcription can never cost you the audio — and then the
   transcript appears with a **Create summary** button.
@@ -178,9 +193,15 @@ in-memory store, and says so in Settings. It never refuses to launch.
 
 ### Privacy
 
-Transcription, OCR and embedding all run on-device. Nothing is sent to any
-server other than Apple's iCloud, and there are no third-party SDKs, analytics,
-or network calls of our own.
+Transcription, OCR and embedding all run on-device by default. Nothing is sent to
+any server other than Apple's iCloud, and there are no third-party SDKs,
+analytics, or network calls of our own.
+
+The one exception is opt-in and off until you turn it on: **Settings ›
+Transcription › Higher accuracy** hands recordings to Apple's speech servers,
+because the on-device model is not good enough for a long multi-speaker
+conversation. Leaving it off keeps everything local at the cost of accuracy —
+that trade is yours to make, which is why it's a switch and not a default.
 
 ---
 

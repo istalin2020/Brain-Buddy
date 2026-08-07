@@ -103,10 +103,22 @@ enum DiscussionSummarizer {
 
         let summary = Summary(
             topics: topics(in: transcript),
-            keyPoints: keyPointIndexes.map { sentences[$0] },
-            followUps: followUpIndexes.map { sentences[$0] }
+            keyPoints: keyPointIndexes.map { clipped(sentences[$0]) },
+            followUps: followUpIndexes.map { clipped(sentences[$0]) }
         )
         return summary.isEmpty ? nil : summary
+    }
+
+    /// Longest a single summary line may be.
+    ///
+    /// Conversation transcribed from speech often has almost no sentence
+    /// punctuation, so one "sentence" can run to hundreds of words. Quoting it
+    /// whole reproduces the transcript under a heading that promises a summary,
+    /// which is worse than saying nothing — it looks like work was done.
+    static let maximumLineLength = 200
+
+    private static func clipped(_ sentence: String) -> String {
+        AnswerComposer.tighten(sentence, limit: maximumLineLength)
     }
 
     // MARK: - Reading a stored summary back

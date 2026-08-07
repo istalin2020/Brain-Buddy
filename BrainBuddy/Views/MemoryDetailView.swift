@@ -308,8 +308,6 @@ private struct AttachmentCell: View {
     let attachment: MemoryAttachment
     var onTap: () -> Void
 
-    @State private var player = AudioPlayerController()
-
     var body: some View {
         switch attachment.kind {
         case .image:
@@ -339,32 +337,7 @@ private struct AttachmentCell: View {
     }
 
     private var audioCell: some View {
-        HStack(spacing: 12) {
-            Button {
-                if player.duration == 0, let url = attachment.temporaryFileURL() {
-                    player.load(url: url)
-                }
-                player.togglePlayback()
-            } label: {
-                Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 34))
-            }
-            .buttonStyle(.plain)
-            .disabled(attachment.payload == nil)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(attachment.filename)
-                    .font(.subheadline)
-                    .lineLimit(1)
-                Text(player.duration > 0
-                     ? "\(format(player.currentTime)) / \(format(player.duration))"
-                     : attachment.formattedDuration)
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
+        AudioPlayerRow(attachment: attachment)
     }
 
     private var fileCell: some View {
@@ -419,11 +392,6 @@ private struct AttachmentCell: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-    }
-
-    private func format(_ time: TimeInterval) -> String {
-        let total = Int(time)
-        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }
 

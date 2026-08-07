@@ -45,6 +45,22 @@ final class DiscussionSummarizerTests: XCTestCase {
         }
     }
 
+    /// Speech transcribed without punctuation arrives as one enormous "sentence".
+    /// Quoting it whole would reproduce the transcript under a Summary heading.
+    func testALineIsClippedRatherThanQuotingAWholeMonologue() throws {
+        let runOn = (1...40).map { "point number \($0) about the yard and the material" }.joined(separator: " ")
+        let transcript = "\(runOn). And separately the invoice was never paid at all."
+
+        let summary = try XCTUnwrap(DiscussionSummarizer.summarize(transcript))
+        for line in summary.keyPoints + summary.followUps {
+            XCTAssertLessThanOrEqual(
+                line.count,
+                DiscussionSummarizer.maximumLineLength + 1,
+                "a summary line ran to \(line.count) characters"
+            )
+        }
+    }
+
     func testSummaryIsShorterThanTheTranscript() throws {
         let summary = try XCTUnwrap(DiscussionSummarizer.summarize(discussion))
         XCTAssertLessThan(summary.text.count, discussion.count)

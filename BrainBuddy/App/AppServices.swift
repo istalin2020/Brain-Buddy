@@ -12,6 +12,11 @@ enum PreferenceKey {
     static let morningBrief = "settings.morningBrief"
     static let morningBriefHour = "settings.morningBriefHour"
     static let morningBriefMinute = "settings.morningBriefMinute"
+    /// Locale identifier for speech recognition; empty means the device language.
+    static let transcriptionLocale = "settings.transcriptionLocale"
+    /// Whether transcription may use Apple's servers instead of the on-device
+    /// model, which is markedly more accurate on long, multi-speaker audio.
+    static let serverTranscription = "settings.serverTranscription"
 }
 
 /// Where a tapped notification wants to land.
@@ -53,7 +58,13 @@ final class AppServices {
             PreferenceKey.backgroundRecording: true,
             PreferenceKey.morningBrief: true,
             PreferenceKey.morningBriefHour: 8,
-            PreferenceKey.morningBriefMinute: 0
+            PreferenceKey.morningBriefMinute: 0,
+            PreferenceKey.transcriptionLocale: "",
+            // Off by default: everything else in this app stays on the device,
+            // and sending recordings to a server should be a decision, not a
+            // surprise. It is offered because for a long bilingual conversation
+            // the accuracy difference is not subtle.
+            PreferenceKey.serverTranscription: false
         ])
         applyPreferences()
     }
