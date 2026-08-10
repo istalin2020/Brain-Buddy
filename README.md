@@ -46,7 +46,7 @@ built from what you already captured:
 | Section | Where it comes from |
 | --- | --- |
 | **Today's schedule** | Dates that land on today, quoted as the sentence you wrote them in. A note from last month saying "quarterly review on the 14th" is exactly what this is for, so this ignores how old the capture is. |
-| **Tasks** | Sentences carrying a commitment — *have to*, *will*, *should*, *let's*, *priority* — from the last two weeks. The same cue detection the summarizer uses. |
+| **Tasks** | Anything still owed, from the last two months. Not just *"I have to…"*: people don't write down their work in the first person. An **instruction** (*"Send the revised drawings"*, including after a comma — *"Leap meeting, study the stringing execution"*), an **obligation** (*"Method statement to be reviewed by the agency"*), or a **bare label** in a short typed note (*"EOT submission"*, *"Milk, eggs, bread"*) all count. A short note that is a *statement* — "The wifi password is 12345" — does not: a noun phrase somebody bothered to write down is a thing to deal with, a sentence with a verb that isn't an instruction is a fact. Tag anything `#todo` to settle it outright. |
 | **Key points** | Key points out of discussions you summarized in the last week. |
 
 **Long lines get a subject.** A quoted sentence of eighty words is accurate and
@@ -76,7 +76,9 @@ turned out not to be a task at all.
 
 Anything you leave open shows up again the next day under **Still open from
 before**, with the date it came from — one row with one history, not a fresh copy
-every morning. Anything you close stays closed and doesn't come back. A dated line
+every morning. It keeps coming back until you close it, which is the point.
+Anything you close stays closed and doesn't come back. **Refresh** in the header
+picks up whatever you captured since the brief was built; it only ever adds. A dated line
 is the exception: standup on Tuesday and standup on Wednesday are the same
 sentence and two different occurrences.
 
@@ -288,12 +290,14 @@ BrainBuddy/
                 SearchEngine (hybrid ranking), AnswerComposer
   Services/     IngestService (the one capture path), TextAnalysis, TextRecognizer,
                 PDFTextExtractor, AudioRecorder, SpeechTranscriber, SpeechSpeaker,
-                DiscussionSummarizer, AudioPlayerController, CloudSyncMonitor
+                DiscussionSummarizer, Headline, AudioPlayerController,
+                CloudSyncMonitor
   Services/     … BriefBuilder (what goes in a brief) + BriefService (persistence),
                 NotificationScheduler, NotificationRouter
   Services/     … SharedInbox (App Group hand-off from the extension)
-  Views/        RootView, TodayView, CaptureView, VoiceCaptureView, LibraryView,
-                MemoryDetailView, AskView, SettingsView, Components/
+  Views/        RootView, TodayView, CaptureView (Input), VoiceCaptureView,
+                LibraryView (Brain), MemoryDetailView, AskView, SettingsView,
+                Components/
   Resources/    Assets.xcassets, PrivacyInfo.xcprivacy
 BrainBuddyShare/  ShareViewController — the share extension
 BrainBuddyTests/

@@ -21,6 +21,7 @@ struct TodayView: View {
     private var memories: [MemoryItem]
 
     @State private var showClosed = false
+    @State private var isRefreshing = false
 
     /// Recomputed rather than stored, so a session left open overnight rolls onto
     /// the new day instead of showing yesterday as "today".
@@ -126,12 +127,29 @@ struct TodayView: View {
 
     private var headerSection: some View {
         Section {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(Date().formatted(.dateTime.weekday(.wide).month(.wide).day()))
-                    .font(.title3.weight(.semibold))
-                Text(progressLine)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(Date().formatted(.dateTime.weekday(.wide).month(.wide).day()))
+                        .font(.title3.weight(.semibold))
+                    Text(progressLine)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 8)
+
+                // In the header rather than buried in a menu: anything captured
+                // later in the day only appears once the brief is rebuilt, so
+                // this is the one control on this screen people reach for.
+                Button {
+                    refresh()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                        .font(.footnote.weight(.medium))
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.bordered)
+                .disabled(isRefreshing)
             }
             .padding(.vertical, 2)
         }
@@ -282,7 +300,12 @@ struct TodayView: View {
         entry.sourceIdentifier.flatMap { lookup[$0] }
     }
 
+    /// Rebuilds today's brief from everything captured since it was last built.
+    /// Only ever adds — nothing you closed comes back.
     private func refresh() {
+        guard !isRefreshing else { return }
+        isRefreshing = true
         services.brief.generate(in: modelContext)
+        isRefreshing = false
     }
 }

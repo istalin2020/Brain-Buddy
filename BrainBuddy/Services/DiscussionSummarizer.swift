@@ -241,6 +241,92 @@ enum DiscussionSummarizer {
         return commitmentCues.contains { padded.contains($0) }
     }
 
+    /// Whether a sentence describes something that still has to happen.
+    ///
+    /// Broader than `isCommitment`, because people do not write down their work in
+    /// the first person. Real captures look like *"Study the stringing execution
+    /// improvement"* and *"Method statement to be reviewed by the testing
+    /// agency"* — an instruction and an obligation, neither of which contains
+    /// "I have to". Waiting for a to-do to phrase itself as a commitment is how a
+    /// brief stays empty while the actual work sits in the library.
+    static func isActionable(_ sentence: String) -> Bool {
+        if isCommitment(sentence) { return true }
+
+        let padded = " " + expandedForMatching(sentence) + " "
+        if obligationCues.contains(where: { padded.contains($0) }) { return true }
+
+        // Checked per clause, not just at the start: "Leap meeting, study the
+        // stringing execution" hides its instruction after the comma.
+        return sentence
+            .components(separatedBy: ",")
+            .contains { opensWithAnInstruction($0) }
+    }
+
+    /// Passive and elliptical ways of saying something is outstanding.
+    private static let obligationCues: [String] = [
+        " to be ", " pending", " asap", " outstanding", " awaiting", " yet to "
+    ]
+
+    /// Whether a clause opens with a bare verb, which in a note to yourself is an
+    /// instruction: "Send the drawings", "Review the schedule".
+    ///
+    /// Tagged in place rather than in isolation — half of English verbs are also
+    /// nouns, and `NLTagger` needs the rest of the clause to tell them apart.
+    static func opensWithAnInstruction(_ clause: String) -> Bool {
+        let trimmed = clause.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.hasSuffix("?") else { return false }
+
+        let words = trimmed.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        guard words.count >= 2 else { return false }
+        let opener = words[0].trimmingCharacters(in: CharacterSet.letters.inverted).lowercased()
+        guard opener.count > 1, !nonImperativeOpeners.contains(opener) else { return false }
+
+        let tagger = NLTagger(tagSchemes: [.lexicalClass])
+        tagger.string = trimmed
+        guard let first = trimmed.firstIndex(where: { $0.isLetter }) else { return false }
+        let tag = tagger.tag(at: first, unit: .word, scheme: .lexicalClass).0
+        return tag == .verb
+    }
+
+    /// Whether the text contains no verb at all — a bare label like "EOT
+    /// submission" or "Milk, eggs, bread".
+    ///
+    /// Somebody who writes down a noun phrase has written down a thing to deal
+    /// with; that is what a quick capture box is for. A sentence with a verb in it
+    /// that *isn't* an instruction is a statement, and statements aren't tasks —
+    /// which is what keeps "The yard was quiet today" and "Wifi password is 12345"
+    /// out of the brief.
+    static func isBareLabel(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        let tagger = NLTagger(tagSchemes: [.lexicalClass])
+        tagger.string = trimmed
+        var sawVerb = false
+        tagger.enumerateTags(
+            in: trimmed.startIndex..<trimmed.endIndex,
+            unit: .word,
+            scheme: .lexicalClass,
+            options: [.omitPunctuation, .omitWhitespace, .omitOther]
+        ) { tag, _ in
+            if tag == .verb {
+                sawVerb = true
+                return false
+            }
+            return true
+        }
+        return !sawVerb
+    }
+
+    /// Words that begin a statement rather than an instruction, whatever the
+    /// tagger makes of them.
+    private static let nonImperativeOpeners: Set<String> = [
+        "am", "are", "be", "been", "being", "did", "do", "does", "had", "has",
+        "have", "he", "his", "how", "i", "is", "it", "its", "may", "might",
+        "she", "that", "the", "their", "there", "these", "they", "this", "was",
+        "we", "were", "what", "when", "where", "which", "who", "why", "you", "your"
+    ]
+
     private static func expandedForMatching(_ sentence: String) -> String {
         sentence
             .lowercased()

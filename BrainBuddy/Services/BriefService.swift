@@ -76,7 +76,9 @@ final class BriefService {
                 text: authored,
                 summary: summary,
                 createdAt: item.createdAt,
-                kindTitle: item.kind.sourceLabel
+                kind: item.kind,
+                kindTitle: item.kind.sourceLabel,
+                tags: item.tagNames
             )
         }
 

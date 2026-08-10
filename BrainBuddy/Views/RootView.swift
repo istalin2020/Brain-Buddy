@@ -22,11 +22,11 @@ struct RootView: View {
                 .tag(Tab.today)
 
             CaptureView()
-                .tabItem { Label("Capture", systemImage: "plus.circle.fill") }
+                .tabItem { Label("Input", systemImage: "plus.circle.fill") }
                 .tag(Tab.capture)
 
             LibraryView()
-                .tabItem { Label("Library", systemImage: "square.stack.3d.up") }
+                .tabItem { Label("Brain", systemImage: "square.stack.3d.up") }
                 .tag(Tab.library)
 
             AskView()

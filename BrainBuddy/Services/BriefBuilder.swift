@@ -10,7 +10,29 @@ struct BriefSource {
     let text: String
     let summary: String
     let createdAt: Date
+    let kind: MemoryKind
     let kindTitle: String
+    let tags: [String]
+
+    init(
+        identifier: UUID,
+        title: String,
+        text: String,
+        summary: String = "",
+        createdAt: Date,
+        kind: MemoryKind = .note,
+        kindTitle: String = "Note",
+        tags: [String] = []
+    ) {
+        self.identifier = identifier
+        self.title = title
+        self.text = text
+        self.summary = summary
+        self.createdAt = createdAt
+        self.kind = kind
+        self.kindTitle = kindTitle
+        self.tags = tags
+    }
 }
 
 /// One proposed line of a brief, before it's persisted as a `BriefEntry`.
@@ -43,8 +65,26 @@ struct BriefCandidate: Equatable {
 enum BriefBuilder {
     /// How far back to look for tasks and discussion points. Schedule items are
     /// exempt — they're pinned to a date, not to when you wrote them down.
-    static let taskLookBackDays = 14
+    ///
+    /// Two months for tasks, because work does not stop being owed after a
+    /// fortnight. Anything already in a brief persists independently of this: it
+    /// carries forward day to day until it is closed. This window only governs
+    /// what gets noticed for the first time.
+    static let taskLookBackDays = 60
     static let pointLookBackDays = 7
+
+    /// Tags that make something a task outright, whatever it says.
+    static let taskTags: Set<String> = ["todo", "task", "action", "followup", "duty"]
+
+    /// A typed note at or under this length is treated as a to-do.
+    ///
+    /// This is what a quick capture box is *for*. "EOT submission" is not a
+    /// sentence with a verb in it and never will be; neither is "Leap meeting,
+    /// stringing execution". Requiring them to phrase themselves as commitments
+    /// means the brief stays empty while the work sits in the library — and a
+    /// wrong guess here costs one swipe to Remove, while a miss costs the thing
+    /// you were trying not to forget.
+    static let shortNoteLimit = 240
 
     static let maximumScheduleItems = 8
     static let maximumTasks = 10
@@ -263,14 +303,7 @@ enum BriefBuilder {
         var candidates: [BriefCandidate] = []
 
         for source in sources where source.createdAt >= cutoff {
-            // A summary's follow-ups are already the distilled commitments, so
-            // when one exists it's a better source than re-scanning the raw text.
-            let followUps = DiscussionSummarizer.parse(source.summary)?.followUps ?? []
-            let sentences = followUps.isEmpty
-                ? Tokenizer.sentences(in: source.text).filter(DiscussionSummarizer.isCommitment)
-                : followUps
-
-            for sentence in sentences {
+            for sentence in taskSentences(in: source) {
                 let line = AnswerComposer.tighten(sentence, limit: 200)
                 let key = BriefEntry.dedupeKey(for: line)
                 guard !key.isEmpty, claimed.insert(key).inserted else { continue }
@@ -286,6 +319,32 @@ enum BriefBuilder {
             }
         }
         return candidates
+    }
+
+    /// What in one capture counts as something still to do.
+    static func taskSentences(in source: BriefSource) -> [String] {
+        // A summary's follow-ups are the distilled commitments; when one exists
+        // it beats re-scanning the raw transcript.
+        if let followUps = DiscussionSummarizer.parse(source.summary)?.followUps, !followUps.isEmpty {
+            return followUps
+        }
+
+        let body = source.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return [] }
+
+        // An explicit tag settles whatever the text can't say for itself.
+        if source.tags.contains(where: { taskTags.contains($0) }) { return [body] }
+
+        // A short typed note with no verb in it is a label for something to do —
+        // "EOT submission", "Milk, eggs, bread". Sentence-level detection can
+        // never catch those, because there is no sentence. See `shortNoteLimit`.
+        if source.kind == .note,
+           body.count <= shortNoteLimit,
+           DiscussionSummarizer.isBareLabel(body) {
+            return [body]
+        }
+
+        return Tokenizer.sentences(in: body).filter(DiscussionSummarizer.isActionable)
     }
 
     // MARK: - Discussion points

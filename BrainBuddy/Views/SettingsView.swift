@@ -263,13 +263,13 @@ struct SettingsView: View {
                 Button {
                     reindexAll()
                 } label: {
-                    Label("Rebuild all search indexes", systemImage: "arrow.clockwise")
+                    Label("Rebuild subjects and search indexes", systemImage: "arrow.clockwise")
                 }
             }
         } header: {
             Text("Maintenance")
         } footer: {
-            Text("Useful after restoring from iCloud on a new device, or if search results look stale. Nothing is deleted.")
+            Text("Re-derives the subject of everything you haven't titled yourself and rebuilds the search index. Useful after restoring from iCloud on a new device, or if subjects and results look stale. Nothing is deleted, and titles you typed are left alone.")
         }
     }
 
@@ -295,6 +295,9 @@ struct SettingsView: View {
         reindexProgress = 0
         Task {
             for (index, item) in items.enumerated() {
+                // Subjects are derived once at capture, so improving the
+                // derivation does nothing for what's already saved.
+                services.ingest.refreshSubject(of: item)
                 await services.ingest.finalize(item, in: modelContext)
                 reindexProgress = Double(index + 1) / Double(items.count)
             }

@@ -29,10 +29,16 @@ enum Headline {
     /// 4. `fallback`.
     static func from(_ text: String, fallback: String = "") -> String {
         let sentences = usableSentences(in: text)
+        let commitment = sentences.first(where: DiscussionSummarizer.isActionable)
+        let best = mostInformative(of: sentences, in: text)
 
-        if let commitment = sentences.first(where: DiscussionSummarizer.isCommitment),
-           let line = condense(commitment) {
-            return line
+        // A whole thought, kept whole, beats a list of nouns. Topics are the
+        // answer for a conversation that never states its own point — not for a
+        // sentence that states it perfectly well.
+        for candidate in [commitment, best].compactMap({ $0 }) {
+            if let line = condense(candidate), survivesCondensing(candidate, as: line) {
+                return line
+            }
         }
 
         let topics = DiscussionSummarizer.topics(in: text, limit: 3)
@@ -40,10 +46,25 @@ enum Headline {
             return topics.joined(separator: ", ").capitalizedFirst
         }
 
-        if let best = mostInformative(of: sentences, in: text), let line = condense(best) {
-            return line
+        // Nothing fits and there are no topics: a truncated sentence still beats
+        // no subject at all.
+        for candidate in [commitment, best].compactMap({ $0 }) {
+            if let line = condense(candidate) { return line }
         }
         return fallback
+    }
+
+    /// Whether enough of the sentence survived to still make the point.
+    ///
+    /// A 76-character line clipped to 62 has lost a tail; a 400-character ramble
+    /// clipped to 62 has lost the point, and for that a list of subjects is the
+    /// more honest heading.
+    private static let minimumRetainedFraction = 0.6
+
+    private static func survivesCondensing(_ sentence: String, as headline: String) -> Bool {
+        guard sentence.count > 0 else { return false }
+        guard headline.hasSuffix("…") else { return true }
+        return Double(headline.count) / Double(sentence.count) >= minimumRetainedFraction
     }
 
     // MARK: - Choosing a sentence

@@ -212,6 +212,107 @@ final class BriefBuilderTests: XCTestCase {
         XCTAssertEqual(task.detail, "Site meeting with PCH")
     }
 
+    // MARK: - What counts as work
+
+    /// Real captures do not phrase themselves in the first person. These are the
+    /// three shapes that were being missed while the brief sat empty.
+    func testWorkPhrasedWithoutACommitmentStillCounts() {
+        XCTAssertTrue(
+            DiscussionSummarizer.isActionable("Method statement to be reviewed by the testing agency"),
+            "a passive obligation is still an obligation"
+        )
+        XCTAssertTrue(
+            DiscussionSummarizer.isActionable("Send the revised drawings to PCH"),
+            "an imperative is an instruction to yourself"
+        )
+        XCTAssertTrue(
+            DiscussionSummarizer.isActionable("Leap meeting, study the stringing execution improvement"),
+            "the instruction is after the comma"
+        )
+    }
+
+    func testPlainDescriptionIsStillNotWork() {
+        XCTAssertFalse(DiscussionSummarizer.isActionable("The material has been at the yard since March"))
+        XCTAssertFalse(DiscussionSummarizer.isActionable("It was raining the whole afternoon"))
+        XCTAssertFalse(DiscussionSummarizer.isActionable("What did the agency say about it?"))
+    }
+
+    /// A short typed note is a to-do: that is what a quick capture box is for, and
+    /// "EOT submission" will never phrase itself as a commitment.
+    func testAShortTypedNoteIsATask() {
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [source(text: "EOT submission", daysAgo: 1)],
+            calendar: calendar
+        )
+        XCTAssertEqual(candidates.filter { $0.kind == .task }.map(\.text), ["EOT submission"])
+    }
+
+    /// A short note that *is* a statement stays out. This is the line between
+    /// "wrote down a thing to deal with" and "wrote down a fact".
+    func testAShortStatementIsNotATask() {
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [source(text: "The wifi password is 12345", daysAgo: 1)],
+            calendar: calendar
+        )
+        XCTAssertTrue(candidates.filter { $0.kind == .task }.isEmpty)
+    }
+
+    func testBareLabelDetection() {
+        XCTAssertTrue(DiscussionSummarizer.isBareLabel("EOT submission"))
+        XCTAssertTrue(DiscussionSummarizer.isBareLabel("Milk, eggs, bread"))
+        XCTAssertFalse(DiscussionSummarizer.isBareLabel("The wifi password is 12345"))
+        XCTAssertFalse(DiscussionSummarizer.isBareLabel("It rained the whole afternoon"))
+    }
+
+    /// A long transcript is not, or every recording would become one giant task.
+    func testALongTranscriptIsNotTreatedAsOneTask() {
+        let rambling = String(repeating: "we talked about the yard and the weather for a while. ", count: 12)
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [BriefSource(
+                identifier: UUID(),
+                title: "Voice note",
+                text: rambling,
+                createdAt: calendar.date(byAdding: .day, value: -1, to: today)!,
+                kind: .voice,
+                kindTitle: "Voice note"
+            )],
+            calendar: calendar
+        )
+        XCTAssertTrue(candidates.filter { $0.text == rambling }.isEmpty)
+    }
+
+    /// An explicit tag settles the ambiguous cases the app can't read.
+    func testATaskTagAlwaysQualifies() {
+        let long = String(repeating: "background and context on the yard situation. ", count: 8)
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [BriefSource(
+                identifier: UUID(),
+                title: "Yard",
+                text: long,
+                createdAt: calendar.date(byAdding: .day, value: -1, to: today)!,
+                kind: .voice,
+                kindTitle: "Voice note",
+                tags: ["todo"]
+            )],
+            calendar: calendar
+        )
+        XCTAssertFalse(candidates.filter { $0.kind == .task }.isEmpty)
+    }
+
+    /// Work does not stop being owed after a fortnight.
+    func testTasksSurviveWellBeyondAFortnight() {
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [source(text: "I have to renew the insurance policy.", daysAgo: 30)],
+            calendar: calendar
+        )
+        XCTAssertEqual(candidates.filter { $0.kind == .task }.count, 1)
+    }
+
     // MARK: - Tasks
 
     func testCommitmentSentencesBecomeTasks() {

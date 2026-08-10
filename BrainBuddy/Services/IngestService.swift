@@ -364,6 +364,26 @@ final class IngestService {
 
     // MARK: - Editing
 
+    /// Re-derives the subject of anything the user hasn't titled themselves.
+    ///
+    /// Titles are only computed once, at capture, so improving how they're derived
+    /// does nothing for what's already saved. This is what the maintenance action
+    /// runs over the library. A title someone typed is never touched.
+    @discardableResult
+    func refreshSubject(of item: MemoryItem) -> Bool {
+        guard !item.hasCustomTitle else { return false }
+        let body = [item.text, item.extractedText]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        guard !body.isEmpty else { return false }
+
+        let derived = TextAnalysis.suggestedTitle(from: body, fallback: item.kind.sourceLabel)
+        guard !derived.isEmpty, derived != item.title else { return false }
+        item.title = derived
+        item.touch()
+        return true
+    }
+
     /// Stores a summary the user reviewed and pressed Save on.
     ///
     /// Re-indexes afterwards, because the summary is searchable text: the point

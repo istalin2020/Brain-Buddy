@@ -47,7 +47,7 @@ struct CaptureView: View {
                 }
                 .padding()
             }
-            .navigationTitle("Capture")
+            .navigationTitle("Input")
             .navigationDestination(for: MemoryItem.self) { item in
                 MemoryDetailView(item: item)
             }
@@ -136,7 +136,7 @@ struct CaptureView: View {
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: $draft)
-                    .frame(minHeight: 160)
+                    .frame(minHeight: 118)
                     .scrollContentBackground(.hidden)
                     .focused($isEditorFocused)
             }

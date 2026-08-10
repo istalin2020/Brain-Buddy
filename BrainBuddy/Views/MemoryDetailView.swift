@@ -287,6 +287,11 @@ struct MemoryDetailView: View {
     /// Editing text changes what the note means, so the index is rebuilt rather
     /// than left pointing at the old wording.
     private func commitEdits() {
+        // From here on this title is the user's, and bulk re-derivation leaves
+        // it alone.
+        if !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            item.hasCustomTitle = true
+        }
         Task { await services.ingest.finalize(item, in: modelContext, activity: "Re-indexing") }
     }
 

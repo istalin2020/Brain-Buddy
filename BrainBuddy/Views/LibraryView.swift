@@ -27,7 +27,7 @@ struct LibraryView: View {
                     list(items)
                 }
             }
-            .navigationTitle(showTrash ? "Trash" : "Library")
+            .navigationTitle(showTrash ? "Trash" : "Brain")
             .searchable(text: $query, prompt: showTrash ? "Search trash" : "Filter your brain")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

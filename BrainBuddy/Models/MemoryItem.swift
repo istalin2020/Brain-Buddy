@@ -59,6 +59,10 @@ final class MemoryItem {
 
     var title: String = ""
 
+    /// Set once the user edits this memory themselves, so that re-deriving
+    /// subjects in bulk can never overwrite a title somebody chose.
+    var hasCustomTitle: Bool = false
+
     /// The primary body: what you typed, or the transcript of what you said.
     var text: String = ""
 
