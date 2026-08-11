@@ -288,36 +288,6 @@ enum DiscussionSummarizer {
         return tag == .verb
     }
 
-    /// Whether the text contains no verb at all — a bare label like "EOT
-    /// submission" or "Milk, eggs, bread".
-    ///
-    /// Somebody who writes down a noun phrase has written down a thing to deal
-    /// with; that is what a quick capture box is for. A sentence with a verb in it
-    /// that *isn't* an instruction is a statement, and statements aren't tasks —
-    /// which is what keeps "The yard was quiet today" and "Wifi password is 12345"
-    /// out of the brief.
-    static func isBareLabel(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-
-        let tagger = NLTagger(tagSchemes: [.lexicalClass])
-        tagger.string = trimmed
-        var sawVerb = false
-        tagger.enumerateTags(
-            in: trimmed.startIndex..<trimmed.endIndex,
-            unit: .word,
-            scheme: .lexicalClass,
-            options: [.omitPunctuation, .omitWhitespace, .omitOther]
-        ) { tag, _ in
-            if tag == .verb {
-                sawVerb = true
-                return false
-            }
-            return true
-        }
-        return !sawVerb
-    }
-
     /// Words that begin a statement rather than an instruction, whatever the
     /// tagger makes of them.
     private static let nonImperativeOpeners: Set<String> = [

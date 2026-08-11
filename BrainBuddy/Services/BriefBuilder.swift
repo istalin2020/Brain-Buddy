@@ -76,6 +76,10 @@ enum BriefBuilder {
     /// Tags that make something a task outright, whatever it says.
     static let taskTags: Set<String> = ["todo", "task", "action", "followup", "duty"]
 
+    /// Tags that keep something out of the brief — the escape hatch for a note
+    /// you wrote down to remember, not to do.
+    static let referenceTags: Set<String> = ["note", "fyi", "reference", "info", "idea"]
+
     /// A typed note at or under this length is treated as a to-do.
     ///
     /// This is what a quick capture box is *for*. "EOT submission" is not a
@@ -87,8 +91,16 @@ enum BriefBuilder {
     static let shortNoteLimit = 240
 
     static let maximumScheduleItems = 8
-    static let maximumTasks = 10
     static let maximumPoints = 5
+
+    /// Safety bound on how many candidates one build will produce, to keep an
+    /// enormous library from turning a rebuild into a long pause.
+    ///
+    /// Deliberately not a display limit. Capping what is *considered* means the
+    /// cap gets spent on lines already in the brief, and whatever you captured
+    /// most recently never reaches deduplication — which looks exactly like a
+    /// Refresh button that does nothing.
+    static let candidateCeiling = 200
 
     static func build(
         for day: Date,
@@ -315,7 +327,12 @@ enum BriefBuilder {
                     scheduledAt: nil,
                     sourceIdentifier: source.identifier
                 ))
-                if candidates.count >= maximumTasks { return candidates }
+                // Bounded only to stop pathological work on an enormous library.
+                // The real limit on how many tasks appear is how many you wrote —
+                // and the cap must not be reached before deduplication runs, or
+                // slots get spent on lines that are already in the brief and the
+                // new one silently never arrives.
+                if candidates.count >= candidateCeiling { return candidates }
             }
         }
         return candidates
@@ -332,15 +349,19 @@ enum BriefBuilder {
         let body = source.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return [] }
 
-        // An explicit tag settles whatever the text can't say for itself.
+        // Explicit tags settle it in either direction, whatever the text says.
         if source.tags.contains(where: { taskTags.contains($0) }) { return [body] }
+        if source.tags.contains(where: { referenceTags.contains($0) }) { return [] }
 
-        // A short typed note with no verb in it is a label for something to do —
-        // "EOT submission", "Milk, eggs, bread". Sentence-level detection can
-        // never catch those, because there is no sentence. See `shortNoteLimit`.
-        if source.kind == .note,
-           body.count <= shortNoteLimit,
-           DiscussionSummarizer.isBareLabel(body) {
+        // A short typed note is a to-do. Not "a short note that parses as an
+        // instruction" — that reading kept dropping perfectly ordinary captures
+        // like "Haffaf Muscat drawing status", which is neither a bare label nor
+        // an imperative and is obviously a thing to deal with.
+        //
+        // The asymmetry is the point: a false positive costs one swipe to Remove,
+        // a false negative costs the thing you were trying not to forget. Tag
+        // something #note to keep it out.
+        if source.kind == .note, body.count <= shortNoteLimit {
             return [body]
         }
 

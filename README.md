@@ -46,7 +46,7 @@ built from what you already captured:
 | Section | Where it comes from |
 | --- | --- |
 | **Today's schedule** | Dates that land on today, quoted as the sentence you wrote them in. A note from last month saying "quarterly review on the 14th" is exactly what this is for, so this ignores how old the capture is. |
-| **Tasks** | Anything still owed, from the last two months. Not just *"I have to…"*: people don't write down their work in the first person. An **instruction** (*"Send the revised drawings"*, including after a comma — *"Leap meeting, study the stringing execution"*), an **obligation** (*"Method statement to be reviewed by the agency"*), or a **bare label** in a short typed note (*"EOT submission"*, *"Milk, eggs, bread"*) all count. A short note that is a *statement* — "The wifi password is 12345" — does not: a noun phrase somebody bothered to write down is a thing to deal with, a sentence with a verb that isn't an instruction is a fact. Tag anything `#todo` to settle it outright. |
+| **Tasks** | Anything still owed, from the last two months. **Every short typed note counts** — that is what a quick capture box is for, and *"EOT submission"* or *"Haffaf Muscat drawing status"* will never phrase itself as a commitment. In longer text and transcripts, a line has to look like work: an **instruction** (*"Send the revised drawings"*, including after a comma — *"Leap meeting, study the stringing execution"*), an **obligation** (*"Method statement to be reviewed by the agency"*), or a first-person commitment. Tag `#todo` to force something in, `#note` to keep it out. |
 | **Key points** | Key points out of discussions you summarized in the last week. |
 
 **Long lines get a subject.** A quoted sentence of eighty words is accurate and
@@ -78,7 +78,13 @@ Anything you leave open shows up again the next day under **Still open from
 before**, with the date it came from — one row with one history, not a fresh copy
 every morning. It keeps coming back until you close it, which is the point.
 Anything you close stays closed and doesn't come back. **Refresh** in the header
-picks up whatever you captured since the brief was built; it only ever adds. A dated line
+picks up whatever you captured since the brief was built; it only ever adds, and
+it says what it did — *"Added 2 new lines"*, *"Nothing new to add"* — because
+"added nothing" and "the button is broken" are otherwise indistinguishable.
+
+The inclusive reading of what counts as a task is deliberate, and asymmetric on
+purpose: a false positive costs one swipe to Remove, a false negative costs the
+thing you were trying not to forget. A dated line
 is the exception: standup on Tuesday and standup on Wednesday are the same
 sentence and two different occurrences.
 

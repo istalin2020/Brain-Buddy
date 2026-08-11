@@ -22,6 +22,8 @@ struct TodayView: View {
 
     @State private var showClosed = false
     @State private var isRefreshing = false
+    @State private var refreshNotice: String?
+    @State private var noticeDismissal: Task<Void, Never>?
 
     /// Recomputed rather than stored, so a session left open overnight rolls onto
     /// the new day instead of showing yesterday as "today".
@@ -131,9 +133,9 @@ struct TodayView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(Date().formatted(.dateTime.weekday(.wide).month(.wide).day()))
                         .font(.title3.weight(.semibold))
-                    Text(progressLine)
+                    Text(refreshNotice ?? progressLine)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(refreshNotice == nil ? .secondary : Color.accentColor)
                 }
 
                 Spacer(minLength: 8)
@@ -305,7 +307,24 @@ struct TodayView: View {
     private func refresh() {
         guard !isRefreshing else { return }
         isRefreshing = true
-        services.brief.generate(in: modelContext)
+        let added = services.brief.generate(in: modelContext)
         isRefreshing = false
+
+        // Says what happened. "Added nothing" and "the button is broken" look
+        // identical otherwise, which is exactly how this got reported.
+        if let failure = services.brief.lastError {
+            refreshNotice = failure
+        } else if added == 0 {
+            refreshNotice = "Nothing new to add."
+        } else {
+            refreshNotice = added == 1 ? "Added 1 new line." : "Added \(added) new lines."
+        }
+
+        noticeDismissal?.cancel()
+        noticeDismissal = Task {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard !Task.isCancelled else { return }
+            refreshNotice = nil
+        }
     }
 }

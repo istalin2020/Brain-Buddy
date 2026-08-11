@@ -50,6 +50,9 @@ final class BriefService {
     @discardableResult
     func generate(for now: Date = Date(), in context: ModelContext) -> Int {
         let day = calendar.startOfDay(for: now)
+        // Cleared up front so the caller can read `lastError` as the outcome of
+        // *this* rebuild rather than of some earlier one.
+        lastError = nil
 
         guard let memories = fetchMemories(in: context) else {
             lastError = "Couldn't read your memories to build today's brief."

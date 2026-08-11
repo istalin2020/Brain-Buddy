@@ -248,22 +248,34 @@ final class BriefBuilderTests: XCTestCase {
         XCTAssertEqual(candidates.filter { $0.kind == .task }.map(\.text), ["EOT submission"])
     }
 
-    /// A short note that *is* a statement stays out. This is the line between
-    /// "wrote down a thing to deal with" and "wrote down a fact".
-    func testAShortStatementIsNotATask() {
+    /// The reported miss: neither a bare label nor an imperative, and obviously a
+    /// thing to deal with. Requiring it to parse as one or the other is what made
+    /// Refresh look broken.
+    func testAnOrdinaryShortNoteIsATask() {
         let candidates = BriefBuilder.build(
             for: today,
-            from: [source(text: "The wifi password is 12345", daysAgo: 1)],
+            from: [source(text: "Haffaf Muscat drawing status", daysAgo: 0)],
+            calendar: calendar
+        )
+        XCTAssertEqual(candidates.filter { $0.kind == .task }.map(\.text), ["Haffaf Muscat drawing status"])
+    }
+
+    /// The escape hatch for the false positives that inclusiveness buys.
+    func testAReferenceTagKeepsANoteOut() {
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [BriefSource(
+                identifier: UUID(),
+                title: "Wifi",
+                text: "The wifi password is 12345",
+                createdAt: today,
+                kind: .note,
+                kindTitle: "Note",
+                tags: ["note"]
+            )],
             calendar: calendar
         )
         XCTAssertTrue(candidates.filter { $0.kind == .task }.isEmpty)
-    }
-
-    func testBareLabelDetection() {
-        XCTAssertTrue(DiscussionSummarizer.isBareLabel("EOT submission"))
-        XCTAssertTrue(DiscussionSummarizer.isBareLabel("Milk, eggs, bread"))
-        XCTAssertFalse(DiscussionSummarizer.isBareLabel("The wifi password is 12345"))
-        XCTAssertFalse(DiscussionSummarizer.isBareLabel("It rained the whole afternoon"))
     }
 
     /// A long transcript is not, or every recording would become one giant task.
@@ -345,14 +357,20 @@ final class BriefBuilderTests: XCTestCase {
         XCTAssertTrue(stale.filter { $0.kind == .task }.isEmpty)
     }
 
-    func testTasksAreCapped() {
+    /// The ceiling is a safety bound, not a display limit. It has to sit far above
+    /// any realistic number of outstanding tasks, because a cap reached *before*
+    /// deduplication spends its slots on lines already in the brief and drops
+    /// whatever was captured most recently.
+    func testTaskCountIsBoundedButNotSmall() {
         let sentences = (1...30).map { "I have to finish item number \($0) before the deadline." }
         let candidates = BriefBuilder.build(
             for: today,
             from: [source(text: sentences.joined(separator: " "))],
             calendar: calendar
         )
-        XCTAssertLessThanOrEqual(candidates.filter { $0.kind == .task }.count, BriefBuilder.maximumTasks)
+        let tasks = candidates.filter { $0.kind == .task }
+        XCTAssertLessThanOrEqual(tasks.count, BriefBuilder.candidateCeiling)
+        XCTAssertGreaterThan(tasks.count, 10, "a small pre-dedupe cap is what hid new captures")
     }
 
     // MARK: - Summaries feed the brief
