@@ -57,6 +57,7 @@ struct RootView: View {
             // A phone left open across midnight should come back to the new day's
             // brief, not yesterday's.
             services.brief.generateIfNeeded(in: modelContext)
+            Task { await services.refreshReminders(in: modelContext) }
         }
         // Set by `NotificationRouter` when the morning notification is tapped.
         .onChange(of: services.pendingDestination) { _, destination in

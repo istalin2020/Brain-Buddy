@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftData
 import SwiftUI
 import UserNotifications
 
@@ -12,6 +13,8 @@ enum PreferenceKey {
     static let morningBrief = "settings.morningBrief"
     static let morningBriefHour = "settings.morningBriefHour"
     static let morningBriefMinute = "settings.morningBriefMinute"
+    /// How many reminders a day carry an open task.
+    static let reminderCount = "settings.reminderCount"
     /// Locale identifier for speech recognition; empty means the device language.
     static let transcriptionLocale = "settings.transcriptionLocale"
     /// Whether transcription may use Apple's servers instead of the on-device
@@ -59,6 +62,7 @@ final class AppServices {
             PreferenceKey.morningBrief: true,
             PreferenceKey.morningBriefHour: 8,
             PreferenceKey.morningBriefMinute: 0,
+            PreferenceKey.reminderCount: 7,
             PreferenceKey.transcriptionLocale: "",
             // Off by default: everything else in this app stays on the device,
             // and sending recordings to a server should be a decision, not a
@@ -85,25 +89,62 @@ final class AppServices {
         )
     }
 
+    var remindersPerDay: Int {
+        let stored = UserDefaults.standard.integer(forKey: PreferenceKey.reminderCount)
+        return stored > 0 ? stored : 7
+    }
+
     /// Re-applies the notification preference at launch, without prompting.
+    ///
+    /// No model context here, so the reminders it schedules carry generic text.
+    /// `refreshReminders(in:)` replaces them with real pending lines as soon as a
+    /// screen with a context is on show.
     func synchronizeMorningBrief() async {
-        let defaults = UserDefaults.standard
         let time = morningBriefTime
         await notifications.synchronize(
-            enabled: defaults.bool(forKey: PreferenceKey.morningBrief),
+            enabled: UserDefaults.standard.bool(forKey: PreferenceKey.morningBrief),
+            pending: [],
             hour: time.hour ?? 8,
-            minute: time.minute ?? 0
+            minute: time.minute ?? 0,
+            count: remindersPerDay
+        )
+    }
+
+    /// Rebuilds the day's reminders around what is actually still open.
+    ///
+    /// Called after every change to the brief and on returning to the foreground,
+    /// because a notification's text is fixed when it is scheduled — see
+    /// `NotificationScheduler.scheduleReminders`.
+    func refreshReminders(in context: ModelContext) async {
+        guard UserDefaults.standard.bool(forKey: PreferenceKey.morningBrief) else {
+            notifications.cancelReminders()
+            return
+        }
+        await notifications.refresh()
+        guard notifications.isAuthorized else { return }
+
+        let time = morningBriefTime
+        await notifications.scheduleReminders(
+            pending: brief.openSubjects(in: context),
+            hour: time.hour ?? 8,
+            minute: time.minute ?? 0,
+            count: remindersPerDay
         )
     }
 
     /// Applies the preference *with* a prompt if one is needed. For the Settings
     /// toggle, where flipping the switch is the request.
-    func applyMorningBriefPreference() async {
+    func applyMorningBriefPreference(pending: [String] = []) async {
         let time = morningBriefTime
         if UserDefaults.standard.bool(forKey: PreferenceKey.morningBrief) {
-            await notifications.scheduleMorningBrief(hour: time.hour ?? 8, minute: time.minute ?? 0)
+            await notifications.scheduleReminders(
+                pending: pending,
+                hour: time.hour ?? 8,
+                minute: time.minute ?? 0,
+                count: remindersPerDay
+            )
         } else {
-            notifications.cancelMorningBrief()
+            notifications.cancelReminders()
         }
     }
 
@@ -111,7 +152,7 @@ final class AppServices {
     ///
     /// Deliberately not at first launch: a permission prompt before the user has
     /// seen what it's for is how you get a "Don't Allow" you can never take back.
-    /// Here, the thing the reminder is about is already visible behind the sheet.
+    /// Here, the thing the reminders are about is already visible behind the sheet.
     func offerMorningBriefIfNeeded() async {
         guard UserDefaults.standard.bool(forKey: PreferenceKey.morningBrief) else { return }
         await notifications.refresh()

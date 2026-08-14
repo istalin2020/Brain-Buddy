@@ -59,50 +59,113 @@ final class NotificationScheduler {
 
     // MARK: - Scheduling
 
-    /// Schedules — or reschedules — the daily brief notification.
+    /// How many reminders a day, and the window they're spread across.
+    static let maximumRemindersPerDay = 12
+    /// Last hour a reminder may fire. Nothing useful comes of nagging at 2am.
+    static let dayEndHour = 21
+    /// Floor on the gap between reminders, for when the start time is late enough
+    /// that the window can't be divided evenly.
+    static let minimumSpacingMinutes = 30
+
+    static func reminderIdentifier(_ slot: Int) -> String {
+        "brainbuddy.reminder.\(slot)"
+    }
+
+    /// The times of day reminders fire: the first at the chosen hour, the rest
+    /// spread evenly to `dayEndHour`.
+    static func reminderTimes(startHour: Int, startMinute: Int, count: Int) -> [DateComponents] {
+        let slots = max(1, min(count, maximumRemindersPerDay))
+        let start = startHour * 60 + startMinute
+        let latest = 23 * 60 + 30
+        guard slots > 1 else { return [Self.components(atMinuteOfDay: start)] }
+
+        let span = (dayEndHour * 60) - start
+        // A start time late in the evening leaves no window to divide, so fall
+        // back to a fixed gap rather than stacking every reminder on one minute.
+        let spacing = span >= (slots - 1) * minimumSpacingMinutes
+            ? span / (slots - 1)
+            : minimumSpacingMinutes
+
+        return (0..<slots).map { Self.components(atMinuteOfDay: min(start + $0 * spacing, latest)) }
+    }
+
+    private static func components(atMinuteOfDay minute: Int) -> DateComponents {
+        var parts = DateComponents()
+        parts.hour = (minute / 60) % 24
+        parts.minute = minute % 60
+        return parts
+    }
+
+    /// Schedules the day's reminders, each carrying one thing that's still open.
     ///
-    /// Returns `false` when notifications aren't permitted, so the caller can put
-    /// the toggle back rather than leaving a switch on that does nothing.
+    /// **Why the text is baked in.** A local notification's content is fixed when
+    /// it's scheduled — the app isn't running at fire time to pick something. So a
+    /// pending line is dealt to each slot here, and the whole set is rebuilt
+    /// whenever the brief changes: after a rebuild, after you close something, and
+    /// when the app comes back to the screen. Between those moments a reminder can
+    /// name something you've since dealt with, which is the cost of the system not
+    /// waking us up to ask.
+    ///
+    /// The lines are shuffled and dealt without repetition, refilling from a fresh
+    /// shuffle when there are fewer open items than slots — so seven reminders
+    /// across three open tasks cycle rather than fixating on one.
+    ///
+    /// Returns `false` when notifications aren't permitted, so a caller can put its
+    /// toggle back rather than leaving a switch on that does nothing.
     @discardableResult
-    func scheduleMorningBrief(hour: Int, minute: Int) async -> Bool {
+    func scheduleReminders(pending: [String], hour: Int, minute: Int, count: Int) async -> Bool {
         guard await requestAuthorization() else {
             await refreshNextTrigger()
             return false
         }
 
-        let content = UNMutableNotificationContent()
-        content.title = "Your brief for today"
-        content.body = "What's on, what's still open, and the points worth having in mind."
-        content.sound = .default
-        // Read by the router to open straight onto the Today tab.
-        content.userInfo = ["destination": "today"]
-        content.threadIdentifier = Self.morningBriefIdentifier
+        cancelReminders()
 
-        var components = DateComponents()
-        components.hour = hour
-        components.minute = minute
+        let times = Self.reminderTimes(startHour: hour, startMinute: minute, count: count)
+        var deck: [String] = []
+        var succeeded = true
 
-        let request = UNNotificationRequest(
-            identifier: Self.morningBriefIdentifier,
-            content: content,
-            trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
-        )
+        for (slot, time) in times.enumerated() {
+            if deck.isEmpty { deck = pending.shuffled() }
+            let line = deck.popLast()
 
-        do {
-            // Adding with an existing identifier replaces the pending request, so
-            // there's no window where two are queued.
-            try await center.add(request)
-        } catch {
-            await refreshNextTrigger()
-            return false
+            let content = UNMutableNotificationContent()
+            if let line {
+                // The first of the day frames itself as the brief; the rest are
+                // single nudges, which is what makes seven a day tolerable.
+                content.title = slot == 0 ? "Your brief for today" : "Still open"
+                content.body = line
+            } else {
+                content.title = "Your brief for today"
+                content.body = slot == 0
+                    ? "What's on, what's still open, and the points worth having in mind."
+                    : "Nothing open right now."
+            }
+            content.sound = .default
+            content.userInfo = [NotificationRouter.destinationKey: AppDestination.today.rawValue]
+            content.threadIdentifier = Self.morningBriefIdentifier
+
+            let request = UNNotificationRequest(
+                identifier: Self.reminderIdentifier(slot),
+                content: content,
+                trigger: UNCalendarNotificationTrigger(dateMatching: time, repeats: true)
+            )
+            do {
+                try await center.add(request)
+            } catch {
+                succeeded = false
+            }
         }
 
         await refreshNextTrigger()
-        return true
+        return succeeded
     }
 
-    func cancelMorningBrief() {
-        center.removePendingNotificationRequests(withIdentifiers: [Self.morningBriefIdentifier])
+    func cancelReminders() {
+        let identifiers = (0..<Self.maximumRemindersPerDay).map(Self.reminderIdentifier)
+        // The single-notification identifier this replaced, so an old pending
+        // request from a previous version can't linger alongside the new set.
+        center.removePendingNotificationRequests(withIdentifiers: identifiers + [Self.morningBriefIdentifier])
         nextTrigger = nil
     }
 
@@ -110,22 +173,25 @@ final class NotificationScheduler {
     ///
     /// Runs at every launch, because the system keeps pending requests across
     /// launches but not across a reinstall or a restore onto a new device —
-    /// otherwise the brief would quietly stop arriving on a new phone. Launch is
+    /// otherwise reminders would quietly stop arriving on a new phone. Launch is
     /// the wrong moment to ask for permission, though, so this only schedules
     /// when permission already exists.
-    func synchronize(enabled: Bool, hour: Int, minute: Int) async {
+    func synchronize(enabled: Bool, pending: [String], hour: Int, minute: Int, count: Int) async {
         await refresh()
         guard enabled else {
-            cancelMorningBrief()
+            cancelReminders()
             return
         }
         guard isAuthorized else { return }
-        await scheduleMorningBrief(hour: hour, minute: minute)
+        await scheduleReminders(pending: pending, hour: hour, minute: minute, count: count)
     }
 
+    /// The soonest of the scheduled reminders, for display in Settings.
     private func refreshNextTrigger() async {
-        let pending = await center.pendingNotificationRequests()
-        let request = pending.first { $0.identifier == Self.morningBriefIdentifier }
-        nextTrigger = (request?.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate()
+        let requests = await center.pendingNotificationRequests()
+        nextTrigger = requests
+            .filter { $0.identifier.hasPrefix("brainbuddy.reminder.") }
+            .compactMap { ($0.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate() }
+            .min()
     }
 }

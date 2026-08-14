@@ -114,6 +114,30 @@ final class BriefService {
         return added
     }
 
+    /// Everything still open, newest day first, as the subject each row leads with.
+    ///
+    /// This is what the day's reminders are dealt from. Closed lines are excluded
+    /// for the obvious reason, and the subject is used rather than the full quote
+    /// because a notification shows one line.
+    func openSubjects(in context: ModelContext, on now: Date = Date()) -> [String] {
+        let day = calendar.startOfDay(for: now)
+        guard let cutoff = calendar.date(byAdding: .day, value: -BriefBuilder.taskLookBackDays, to: day) else {
+            return []
+        }
+        let descriptor = FetchDescriptor<BriefEntry>(
+            predicate: #Predicate { $0.day >= cutoff && !$0.isClosed },
+            sortBy: [SortDescriptor(\.day, order: .reverse), SortDescriptor(\.sortIndex)]
+        )
+        guard let entries = try? context.fetch(descriptor) else { return [] }
+
+        var seen = Set<String>()
+        return entries.compactMap { entry in
+            let subject = entry.subject.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !subject.isEmpty, seen.insert(entry.dedupeKey).inserted else { return nil }
+            return subject
+        }
+    }
+
     // MARK: - Closing and reopening
 
     func close(_ entry: BriefEntry, in context: ModelContext) {

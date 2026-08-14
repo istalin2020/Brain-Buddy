@@ -16,6 +16,7 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.morningBrief) private var morningBrief = true
     @AppStorage(PreferenceKey.morningBriefHour) private var briefHour = 8
     @AppStorage(PreferenceKey.morningBriefMinute) private var briefMinute = 0
+    @AppStorage(PreferenceKey.reminderCount) private var reminderCount = 7
     @AppStorage(PreferenceKey.transcriptionLocale) private var transcriptionLocale = ""
     @AppStorage(PreferenceKey.serverTranscription) private var serverTranscription = false
 
@@ -44,6 +45,7 @@ struct SettingsView: View {
             .onChange(of: morningBrief) { _, _ in rescheduleBrief() }
             .onChange(of: briefHour) { _, _ in rescheduleBrief() }
             .onChange(of: briefMinute) { _, _ in rescheduleBrief() }
+            .onChange(of: reminderCount) { _, _ in rescheduleBrief() }
             .onChange(of: semanticSearch) { _, _ in services.applyPreferences() }
             .onChange(of: autoStopDictation) { _, _ in services.applyPreferences() }
             .onChange(of: backgroundRecording) { _, _ in services.applyPreferences() }
@@ -93,7 +95,14 @@ struct SettingsView: View {
             Toggle("Daily reminder", isOn: $morningBrief)
 
             if morningBrief {
-                DatePicker("Time", selection: briefTimeBinding, displayedComponents: .hourAndMinute)
+                DatePicker("First reminder", selection: briefTimeBinding, displayedComponents: .hourAndMinute)
+
+                Stepper(value: $reminderCount, in: 1...NotificationScheduler.maximumRemindersPerDay) {
+                    LabeledContent(
+                        "Reminders a day",
+                        value: reminderCount == 1 ? "1" : "\(reminderCount)"
+                    )
+                }
 
                 if let next = services.notifications.nextTrigger {
                     LabeledContent(
@@ -111,7 +120,7 @@ struct SettingsView: View {
         } header: {
             Text("Morning brief")
         } footer: {
-            Text("A notification at this time every day, and the Today tab shows what's on, what you said you'd do, and the key points from recent discussions.\n\niOS gives no app a guaranteed slot to run at a fixed time, so the notification is the alarm and the brief is built the moment you open the app — stamped with when that was. Nothing is computed on a server; it all comes from what's already on this device.")
+            Text("The first reminder frames the day; the rest are single nudges, each naming one thing still open, spread evenly from that time until 9pm. They're dealt from your open lines at random without repeating, so a handful of tasks cycle rather than one being repeated all day.\n\nA notification's text is fixed when it's scheduled — iOS doesn't wake the app to ask — so the set is rebuilt whenever the brief changes and whenever you open the app. Between those moments a reminder can name something you've since closed. Nothing is computed on a server; it all comes from what's already on this device.")
         }
     }
 
@@ -137,7 +146,11 @@ struct SettingsView: View {
     /// Flipping the switch *is* the permission request, so this path prompts —
     /// unlike the silent reapply at launch.
     private func rescheduleBrief() {
-        Task { await services.applyMorningBriefPreference() }
+        Task {
+            await services.applyMorningBriefPreference(
+                pending: services.brief.openSubjects(in: modelContext)
+            )
+        }
     }
 
     private var searchSection: some View {

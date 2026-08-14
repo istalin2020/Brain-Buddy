@@ -77,6 +77,7 @@ struct TodayView: View {
             .task {
                 services.brief.generateIfNeeded(in: modelContext)
                 await services.offerMorningBriefIfNeeded()
+                await services.refreshReminders(in: modelContext)
             }
         }
     }
@@ -160,7 +161,7 @@ struct TodayView: View {
     private func row(_ entry: BriefEntry, source: MemoryItem?, showDay: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Button {
-                services.brief.toggle(entry, in: modelContext)
+                close(entry)
             } label: {
                 Image(systemName: entry.isClosed ? "checkmark.circle.fill" : "circle")
                     .font(.title3)
@@ -222,7 +223,7 @@ struct TodayView: View {
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button {
-                services.brief.toggle(entry, in: modelContext)
+                close(entry)
             } label: {
                 Label(entry.isClosed ? "Reopen" : "Close", systemImage: entry.isClosed ? "arrow.uturn.backward" : "checkmark")
             }
@@ -230,6 +231,7 @@ struct TodayView: View {
 
             Button(role: .destructive) {
                 services.brief.remove(entry, in: modelContext)
+                rescheduleReminders()
             } label: {
                 Label("Remove", systemImage: "trash")
             }
@@ -302,6 +304,18 @@ struct TodayView: View {
         entry.sourceIdentifier.flatMap { lookup[$0] }
     }
 
+    private func close(_ entry: BriefEntry) {
+        services.brief.toggle(entry, in: modelContext)
+        rescheduleReminders()
+    }
+
+    /// The day's reminders name specific open lines, chosen when they were
+    /// scheduled, so closing something has to rebuild them or it keeps being
+    /// announced.
+    private func rescheduleReminders() {
+        Task { await services.refreshReminders(in: modelContext) }
+    }
+
     /// Rebuilds today's brief from everything captured since it was last built.
     /// Only ever adds — nothing you closed comes back.
     private func refresh() {
@@ -319,6 +333,8 @@ struct TodayView: View {
         } else {
             refreshNotice = added == 1 ? "Added 1 new line." : "Added \(added) new lines."
         }
+
+        rescheduleReminders()
 
         noticeDismissal?.cancel()
         noticeDismissal = Task {

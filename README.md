@@ -40,8 +40,24 @@ saved, so an interrupted import loses nothing.
 
 ### The morning brief
 
-A notification at **8:00 every morning**, and a **Today** tab holding a brief
-built from what you already captured:
+**Seven reminders a day** and a **Today** tab holding a brief built from what you
+already captured.
+
+The first fires at 8:00 and frames the day; the other six are single nudges spread
+evenly to 9pm, each naming one thing that's still open. They're dealt from your
+open lines shuffled and without repetition, refilling from a fresh shuffle when
+there are fewer open items than slots — so three tasks cycle across seven
+reminders rather than one being repeated all day. Both the start time and the count
+(1–12) are in Settings › Morning brief.
+
+A notification's text is fixed when it's scheduled — iOS doesn't wake the app at
+fire time to ask what to say — so the whole set is rebuilt whenever the brief
+changes: after a rebuild, after you close or remove a line, and when the app
+returns to the screen. Between those moments a reminder can name something you've
+since dealt with. That's the cost of the system not asking, and it's stated in
+Settings rather than hidden.
+
+What's in the brief:
 
 | Section | Where it comes from |
 | --- | --- |
