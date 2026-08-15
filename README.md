@@ -15,7 +15,7 @@ Built with SwiftUI + SwiftData (CloudKit mirroring), iOS 17+.
 | Input | How it's handled |
 | --- | --- |
 | **Text** | Typed straight into the capture box. `#hashtags` become tags automatically. |
-| **Dictation** | A mic inside the capture box types what you say into the note as you say it, so you can speak a thought and still edit it before saving. Distinct from a voice note: this is a keyboard, that keeps the recording. It runs continuously — pausing to think doesn't end it, and nothing said earlier is lost. Only tapping the mic (or Save) ends it. |
+| **Dictation** | A mic inside the capture box types what you say into the note as you say it, so you can speak a thought and still edit it before saving. Distinct from a voice note: this is a keyboard, that keeps the recording. It runs continuously — pause for a minute if you like, nothing already dictated is lost — and only the ↑ button (or Save) ends it. |
 | **Voice** | Recorded to AAC, saved immediately, then transcribed with `SFSpeechRecognizer` (on-device when available). Keeps recording with the screen off, so you can capture a whole discussion. Afterwards you get the transcript, and can turn it into a saved summary. |
 | **Image** | Photo library or camera. Text is pulled out with Vision OCR so photos are searchable by their contents. |
 | **Scan** | VisionKit's document scanner — edge detection and perspective correction, then OCR per page. |
@@ -355,6 +355,15 @@ search behavior testable without a device or a container.
   roughly a minute, so long dictation starts a fresh pass and banks the previous
   text. The audio engine keeps running across the swap, but a word spoken in the
   few milliseconds it takes can still be clipped.
+
+  Worse, it doesn't always *say* a pass ended: on-device recognition will quietly
+  begin a new utterance inside the same task, with no `isFinal` and no error, just
+  a shorter transcript. So banking is triggered by the text itself — a result that
+  doesn't extend the previous one is treated as a new utterance. Continuity is
+  judged on words, tolerant of the recognizer revising its own tail ("by two" →
+  "buy 2"), and a result whose first word differs or which loses most of its
+  length is a restart. A genuinely new utterance that happens to begin with the
+  same word as the last one can lose a word or two at the seam.
 - **Summaries have no speaker labels.** `SFSpeechRecognizer` doesn't diarize, so a
   two-person discussion transcribes as one voice. Key points and follow-ups are
   quoted correctly; who said them isn't recorded.

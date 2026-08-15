@@ -263,7 +263,22 @@ final class SpeechTranscriber {
         guard isListening else { return }
 
         if let result {
-            currentPass = result.bestTranscription.formattedString
+            let incoming = result.bestTranscription.formattedString
+
+            // A pass's transcript is supposed to grow. When it comes back shorter
+            // and unrelated instead, the recognizer has silently begun a new
+            // utterance *inside the same task* — no `isFinal`, no error, just a
+            // fresh transcript. On-device recognition does this after a pause,
+            // and it is what made everything already dictated disappear the
+            // moment you carried on speaking.
+            //
+            // So the bank happens here, on the evidence of the text itself,
+            // rather than waiting for a signal that never comes.
+            if !Self.continues(incoming, from: currentPass) {
+                commitCurrentPass()
+            }
+
+            currentPass = incoming
             liveTranscript = Self.joined(committedTranscript, currentPass)
             lastTranscriptChange = Date()
             consecutiveRestartFailures = 0
@@ -277,6 +292,37 @@ final class SpeechTranscriber {
         if error != nil {
             rollOverOrFinish()
         }
+    }
+
+    /// Whether `incoming` extends `previous` rather than replacing it.
+    ///
+    /// Compared as words, and tolerant of the last couple changing, because a
+    /// recognizer legitimately revises its own tail as it hears more — "two" to
+    /// "to", "by" to "buy". A transcript that loses more than that, or whose
+    /// stable prefix no longer matches, is a different utterance.
+    nonisolated static func continues(_ incoming: String, from previous: String) -> Bool {
+        let previousWords = words(in: previous)
+        guard !previousWords.isEmpty else { return true }
+
+        let incomingWords = words(in: incoming)
+        guard !incomingWords.isEmpty else { return false }
+
+        // Once the recognizer has settled on how an utterance opens it doesn't
+        // change its mind about the first word. A different one means it is
+        // transcribing something else.
+        guard incomingWords[0] == previousWords[0] else { return false }
+
+        let revisionSlack = 2
+        guard incomingWords.count + revisionSlack >= previousWords.count else { return false }
+
+        let stable = max(1, min(previousWords.count, incomingWords.count) - revisionSlack)
+        return Array(incomingWords.prefix(stable)) == Array(previousWords.prefix(stable))
+    }
+
+    nonisolated private static func words(in text: String) -> [String] {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
     }
 
     /// A pass ended. In continuous mode that's a comma, not a full stop.
@@ -324,7 +370,7 @@ final class SpeechTranscriber {
         liveTranscript = committedTranscript
     }
 
-    private static func joined(_ committed: String, _ pass: String) -> String {
+    nonisolated private static func joined(_ committed: String, _ pass: String) -> String {
         let addition = pass.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !addition.isEmpty else { return committed }
         guard !committed.isEmpty else { return addition }

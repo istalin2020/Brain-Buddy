@@ -176,15 +176,19 @@ struct CaptureView: View {
 
     private var dictationButton: some View {
         Button(action: toggleDictation) {
-            Image(systemName: isDictating ? "waveform.circle.fill" : "mic.circle.fill")
+            // An up arrow while listening, not a waveform: the button's job at
+            // that point is "I'm finished, take it", which is what an arrow says
+            // and a waveform doesn't.
+            Image(systemName: isDictating ? "arrow.up.circle.fill" : "mic.circle.fill")
                 .font(.title2)
                 .symbolEffect(.pulse, isActive: isDictating)
-                .foregroundStyle(isDictating ? Color.red : Color.accentColor)
+                .foregroundStyle(Color.accentColor)
+                .contentTransition(.symbolEffect(.replace))
         }
         .buttonStyle(.plain)
         .padding(10)
         .disabled(services.ingest.isBusy)
-        .accessibilityLabel(isDictating ? "Stop dictating" : "Dictate into this note")
+        .accessibilityLabel(isDictating ? "Finish dictating" : "Dictate into this note")
     }
 
     @ViewBuilder
@@ -192,9 +196,11 @@ struct CaptureView: View {
         if isDictating {
             HStack(spacing: 6) {
                 Image(systemName: "dot.radiowaves.left.and.right")
-                Text(transcriber.liveTranscript.isEmpty ? "Listening…" : "Tap the mic when you're done")
+                Text(transcriber.liveTranscript.isEmpty
+                     ? "Listening…"
+                     : "Pause as long as you like · tap ↑ when done")
                     .lineLimit(1)
-                    .minimumScaleFactor(0.85)
+                    .minimumScaleFactor(0.8)
             }
             .font(.caption)
             .foregroundStyle(.secondary)
