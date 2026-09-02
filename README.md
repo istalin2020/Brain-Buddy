@@ -179,6 +179,35 @@ Voice capture is built for the long case, not just the ten-second reminder:
 Any long memory can be summarized later, too: open it and the Summary section is
 there, including for OCR'd scans and imported PDFs.
 
+### Brain boxes
+
+The **Brain** tab opens on a grid of boxes, and tapping one narrows the list
+below it.
+
+The obvious grouping — one box per kind — is useless for how a capture app
+actually gets used: nearly everything is a typed note, so you end up with one
+box holding everything and four empty ones. So the boxes that lead are the
+**subjects that recur in your own words** — "Tower", "PCH", "Yard" — read out of
+the text by the same extractor that titles a recording. A subject needs to turn
+up in at least two memories to earn a box (one mention is a detail, not a
+compartment), at most six of them are shown, and a subject that is already one
+of your `#tags` doesn't get a second box under a different name. Your tags come
+next, then the kinds, which are always correct and sometimes exactly what you
+want ("show me the photos").
+
+Boxes are derived, never stored: nothing to file, nothing to maintain, and a box
+appears or disappears as what you capture changes. The grid is rebuilt when the
+library changes rather than on every redraw, because reading subjects out of a
+memory is two `NLTagger` passes and doing that per scroll frame would stutter.
+
+**Every row says one thing once.** Rows used to show a heading with the body
+underneath, which for a typed note is the same sentence twice — the title *is*
+the opening of the body. Now a row shows the heading, then only what the heading
+left out: a saved summary's first key point when there is one, otherwise the
+rest of the body, and nothing at all when that would just restate the heading.
+The kind and the date it entered your brain sit down the right edge, out of the
+reading column, so they're scannable instead of something to read past.
+
 ### Search (typed or spoken)
 
 The **Ask** tab is a hybrid retriever:
@@ -302,8 +331,10 @@ blob round-trip, hybrid ranking behavior, answer phrasing, link-vs-note
 detection and link titling, summarizer behavior (including the property that
 matters most — every summary line is quoted verbatim from the transcript), what
 lands in a morning brief and what's correctly left out of it, the stored-summary
-round trip the brief depends on, and a SwiftData schema smoke test (in-memory, no
-iCloud).
+round trip the brief depends on, which memories land in which brain box (and
+which subjects are too rare to earn one), the row-summary rule that stops a
+heading being repeated underneath itself, and a SwiftData schema smoke test
+(in-memory, no iCloud).
 
 `BriefBuilder` is tested against a fixed calendar date, so "what shows up in
 tomorrow's brief" is pinned down rather than dependent on when the suite runs.
@@ -315,7 +346,8 @@ tomorrow's brief" is pinned down rather than dependent on when the suite runs.
 ```
 BrainBuddy/
   App/          BrainBuddyApp, AppServices (shared singletons), PersistenceController
-  Models/       MemoryItem, MemoryAttachment, MemoryTag, BriefEntry  (SwiftData + CloudKit)
+  Models/       MemoryItem, MemoryAttachment, MemoryTag, BriefEntry  (SwiftData + CloudKit),
+                BrainBox (how the Brain tab groups a library — no SwiftData, so it is testable)
   Search/       Tokenizer, BM25Index, VectorMath, EmbeddingService,
                 SearchEngine (hybrid ranking), AnswerComposer
   Services/     IngestService (the one capture path), TextAnalysis, TextRecognizer,

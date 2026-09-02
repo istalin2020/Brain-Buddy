@@ -17,12 +17,15 @@ struct MemoryRow: View {
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(2)
 
-                let body = snippet ?? item.preview
+                // A search hit shows the matching passage; everywhere else shows
+                // the key summary, which is empty when the heading already said
+                // it. See `MemoryItem.listSummary`.
+                let body = snippet ?? item.listSummary
                 if !body.isEmpty {
                     Text(body)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                        .lineLimit(3)
+                        .lineLimit(2)
                 }
 
                 // Kept on the left: this is "why this matched", which belongs
@@ -35,16 +38,15 @@ struct MemoryRow: View {
                         .padding(.top, 2)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer(minLength: 8)
-
-            // Kind and age live down the right edge, out of the reading column.
+            // Kind and date live down the right edge, out of the reading column.
             // They're the same two facts on every row, so putting them in a
             // fixed place makes them scannable instead of something you have to
             // read past to reach the next title.
             VStack(alignment: .trailing, spacing: 4) {
                 KindBadge(kind: item.kind)
-                Text(item.createdAt.relativeShortDescription)
+                Text(item.createdAt.filedDateDescription)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -55,6 +57,8 @@ struct MemoryRow: View {
                 }
             }
             .fixedSize(horizontal: true, vertical: false)
+            // Metadata is short and fixed; the title is what should give way.
+            .layoutPriority(1)
         }
         .padding(.vertical, 4)
     }

@@ -11,9 +11,14 @@ struct LibraryView: View {
     private var allMemories: [MemoryItem]
 
     @State private var query = ""
-    @State private var kindFilter: MemoryKind?
     @State private var showTrash = false
     @State private var confirmEmptyTrash = false
+    /// Which box is open. An id rather than a `BrainBox` so a rebuild of the
+    /// index doesn't lose the selection.
+    @State private var selectedBox = "everything"
+    /// Built off the library and kept, because reading subjects out of every
+    /// memory is two `NLTagger` passes each — cheap once, ruinous per redraw.
+    @State private var index = BrainBoxIndex()
 
     var body: some View {
         NavigationStack {
@@ -21,7 +26,9 @@ struct LibraryView: View {
             // expensive to run again for the empty check and the row count.
             let items = displayedItems
             Group {
-                if items.isEmpty {
+                // With a box open, an empty result still shows the grid — losing
+                // it would leave no way back to Everything.
+                if items.isEmpty, showTrash || index.boxes.count <= 1 {
                     emptyState
                 } else {
                     list(items)
@@ -32,13 +39,6 @@ struct LibraryView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Picker("Type", selection: $kindFilter) {
-                            Text("All types").tag(MemoryKind?.none)
-                            ForEach(MemoryKind.allCases) { kind in
-                                Label(kind.title, systemImage: kind.systemImage).tag(MemoryKind?.some(kind))
-                            }
-                        }
-                        Divider()
                         Toggle("Show trash", isOn: $showTrash)
                         if showTrash {
                             Button("Empty trash", role: .destructive) { confirmEmptyTrash = true }
@@ -63,6 +63,33 @@ struct LibraryView: View {
             .navigationDestination(for: MemoryItem.self) { item in
                 MemoryDetailView(item: item)
             }
+            // Rebuilt when the library changes rather than on every redraw.
+            .task(id: librarySignature) { rebuildBoxes() }
+        }
+    }
+
+    /// Changes when anything that could move a memory between boxes changes.
+    private var librarySignature: String {
+        let newest = allMemories.first?.updatedAt.timeIntervalSince1970 ?? 0
+        return "\(allMemories.count)-\(Int(newest))"
+    }
+
+    private func rebuildBoxes() {
+        index = BrainBoxBuilder.build(
+            from: allMemories
+                .filter { !$0.isTrashed }
+                .map {
+                    BrainBoxItem(
+                        id: $0.identifier,
+                        kind: $0.kind,
+                        tags: $0.tagNames,
+                        text: $0.searchableText
+                    )
+                }
+        )
+        // A box can disappear when the memory that justified it is edited away.
+        if !index.boxes.contains(where: { $0.id == selectedBox }) {
+            selectedBox = "everything"
         }
     }
 
@@ -70,7 +97,22 @@ struct LibraryView: View {
 
     private func list(_ items: [MemoryItem]) -> some View {
         List {
+            if !showTrash, index.boxes.count > 1 {
+                Section {
+                    BrainBoxGrid(boxes: index.boxes, selection: $selectedBox)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                }
+            }
+
             Section {
+                if items.isEmpty {
+                    Text(query.isEmpty ? "This box is empty." : "Nothing in this box matches.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .listRowSeparator(.hidden)
+                }
                 ForEach(items) { item in
                     NavigationLink(value: item) {
                         MemoryRow(item: item, snippet: snippet(for: item))
@@ -107,7 +149,7 @@ struct LibraryView: View {
                     }
                 }
             } header: {
-                Text(items.count == 1 ? "1 memory" : "\(items.count) memories")
+                Text(listHeading(count: items.count))
             }
         }
         .listStyle(.plain)
@@ -120,18 +162,30 @@ struct LibraryView: View {
             message: showTrash
                 ? "Deleted memories wait here until you empty the trash."
                 : (query.isEmpty
-                    ? "Head to Capture to add your first memory."
+                    ? "Head to Input to add your first memory."
                     : "Try the Ask tab — it searches by meaning as well as by keyword.")
         )
     }
 
     // MARK: - Filtering
 
+    private var openBox: BrainBox? {
+        index.boxes.first { $0.id == selectedBox }
+    }
+
+    private func listHeading(count: Int) -> String {
+        let noun = count == 1 ? "memory" : "memories"
+        guard let openBox, openBox.filter != .everything else { return "\(count) \(noun)" }
+        return "\(openBox.title) · \(count) \(noun)"
+    }
+
     private var scopedItems: [MemoryItem] {
         allMemories.filter { item in
             guard item.isTrashed == showTrash else { return false }
-            if let kindFilter, item.kind != kindFilter { return false }
-            return true
+            // Trash is a place, not a box; the grid is hidden there.
+            if showTrash { return true }
+            guard let openBox else { return true }
+            return index.contains(item, in: openBox)
         }
     }
 

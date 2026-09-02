@@ -136,14 +136,16 @@ struct CaptureView: View {
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: $draft)
-                    .frame(minHeight: 118)
+                    // Trimmed to pay for the taller mic below it, so the box as
+                    // a whole didn't grow back.
+                    .frame(minHeight: 104)
                     .scrollContentBackground(.hidden)
                     .focused($isEditorFocused)
             }
             .padding(8)
             // Room along the bottom edge for the dictation controls, so growing
             // text never slides under them.
-            .padding(.bottom, 30)
+            .padding(.bottom, 44)
             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             // One row rather than two corner overlays, so a long status line can
             // never slide under the button.
@@ -180,7 +182,9 @@ struct CaptureView: View {
             // that point is "I'm finished, take it", which is what an arrow says
             // and a waveform doesn't.
             Image(systemName: isDictating ? "arrow.up.circle.fill" : "mic.circle.fill")
-                .font(.title2)
+                // Sized to be hit without looking, mid-thought, one-handed —
+                // matching the mic on the Ask screen.
+                .font(.system(size: 38))
                 .symbolEffect(.pulse, isActive: isDictating)
                 .foregroundStyle(Color.accentColor)
                 .contentTransition(.symbolEffect(.replace))
