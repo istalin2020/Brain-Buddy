@@ -90,6 +90,14 @@ relaunching and syncs to your other devices, because a brief you can't tick off
 is just a search result. Swipe for the same thing, plus *Remove* for a line that
 turned out not to be a task at all.
 
+What you closed today collects in a **Completed today** section at the bottom,
+collapsed to a count and one tap from being expanded — so ticking something off
+gives you the satisfaction of seeing it done, and a way back if you were too
+quick. It keys on when a line was closed rather than which day's brief it came
+from: a task carried over from last week and ticked this morning was completed
+*today*, and filing it under last week is how it would vanish with no way to
+reopen it.
+
 Anything you leave open shows up again the next day under **Still open from
 before**, with the date it came from — one row with one history, not a fresh copy
 every morning. It keeps coming back until you close it, which is the point.

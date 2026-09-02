@@ -54,22 +54,6 @@ struct TodayView: View {
             .navigationDestination(for: MemoryItem.self) { item in
                 MemoryDetailView(item: item)
             }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button {
-                            refresh()
-                        } label: {
-                            Label("Rebuild brief", systemImage: "arrow.clockwise")
-                        }
-                        Toggle(isOn: $showClosed) {
-                            Label("Show closed", systemImage: "checkmark.circle")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                }
-            }
             // The brief is built here rather than at 8 am by a background task,
             // because iOS grants no guaranteed slot at a fixed time. The 8 am
             // notification is the alarm; this is the work, and it takes
@@ -117,10 +101,18 @@ struct TodayView: View {
                 }
             }
 
-            if showClosed, !closedToday.isEmpty {
-                Section("Closed today") {
-                    ForEach(closedToday) { entry in
-                        row(entry, source: source(of: entry, in: sources))
+            if !completed.isEmpty {
+                Section {
+                    if showClosed {
+                        ForEach(completed) { entry in
+                            row(entry, source: source(of: entry, in: sources))
+                        }
+                    }
+                } header: {
+                    completedHeader
+                } footer: {
+                    if showClosed {
+                        Text("Tap a line to reopen it if you ticked it off too early.")
                     }
                 }
             }
@@ -156,6 +148,31 @@ struct TodayView: View {
             }
             .padding(.vertical, 2)
         }
+    }
+
+    /// Doubles as the disclosure control for the section, so completed work is
+    /// visible as a count without taking up the screen — and one tap away when
+    /// you want to check or undo something.
+    private var completedHeader: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { showClosed.toggle() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle")
+                Text("Completed today")
+                Text("\(completed.count)")
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .rotationEffect(.degrees(showClosed ? 90 : 0))
+            }
+            .font(.subheadline)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .textCase(nil)
+        .accessibilityLabel(showClosed ? "Hide completed" : "Show completed")
     }
 
     private func row(_ entry: BriefEntry, source: MemoryItem?, showDay: Bool = false) -> some View {
@@ -253,8 +270,17 @@ struct TodayView: View {
         entries.filter { Calendar.current.isDate($0.day, inSameDayAs: today) && !$0.isClosed }
     }
 
-    private var closedToday: [BriefEntry] {
-        entries.filter { Calendar.current.isDate($0.day, inSameDayAs: today) && $0.isClosed }
+    /// Keyed on when it was closed rather than which day's brief it belonged to.
+    /// A line carried over from last week and ticked off this morning was
+    /// completed *today*, and filtering by `day` made it disappear with no way
+    /// to reopen it.
+    private var completed: [BriefEntry] {
+        entries
+            .filter { entry in
+                guard entry.isClosed, let closedAt = entry.closedAt else { return false }
+                return Calendar.current.isDate(closedAt, inSameDayAs: today)
+            }
+            .sorted { ($0.closedAt ?? .distantPast) > ($1.closedAt ?? .distantPast) }
     }
 
     /// Open lines from earlier days. A task doesn't stop mattering at midnight, so
@@ -266,12 +292,12 @@ struct TodayView: View {
     }
 
     private var isEmpty: Bool {
-        todayEntries.isEmpty && carriedOver.isEmpty && !(showClosed && !closedToday.isEmpty)
+        todayEntries.isEmpty && carriedOver.isEmpty && completed.isEmpty
     }
 
     private var progressLine: String {
         let open = todayEntries.count + carriedOver.count
-        let closed = closedToday.count
+        let closed = completed.count
         if open == 0 && closed > 0 { return "All clear — \(closed) closed today." }
         if open == 0 { return "Nothing open." }
 

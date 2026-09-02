@@ -63,9 +63,13 @@ struct AskView: View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
+                    .font(.title3)
                     .foregroundStyle(.secondary)
 
+                // Questions are long — "what is my TSH value from the latest
+                // report" — so the field gets body-sized text and room to sit in.
                 TextField("Ask anything you've saved…", text: $query)
+                    .font(.body)
                     .focused($isFieldFocused)
                     .submitLabel(.search)
                     .onSubmit { ask(query) }
@@ -76,6 +80,7 @@ struct AskView: View {
                         query = ""
                     } label: {
                         Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
                             .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
@@ -84,15 +89,17 @@ struct AskView: View {
 
                 Button(action: toggleListening) {
                     Image(systemName: transcriber.isListening ? "waveform.circle.fill" : "mic.circle.fill")
-                        .font(.title2)
+                        .font(.system(size: 34))
                         .symbolEffect(.pulse, isActive: transcriber.isListening)
                         .foregroundStyle(transcriber.isListening ? Color.red : Color.accentColor)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(transcriber.isListening ? "Stop listening" : "Ask by voice")
             }
-            .padding(12)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(minHeight: 58)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             if transcriber.isListening {
                 Text(transcriber.liveTranscript.isEmpty ? "Listening…" : transcriber.liveTranscript)

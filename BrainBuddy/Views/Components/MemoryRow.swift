@@ -25,24 +25,36 @@ struct MemoryRow: View {
                         .lineLimit(3)
                 }
 
-                HStack(spacing: 8) {
-                    KindBadge(kind: item.kind)
-                    Text(item.createdAt.relativeShortDescription)
+                // Kept on the left: this is "why this matched", which belongs
+                // with the text it is explaining rather than in the metadata
+                // column.
+                if let footnote {
+                    Text(footnote)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    if item.isPinned {
-                        Image(systemName: "pin.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                    }
-                    if let footnote {
-                        Text(footnote)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 2)
                 }
-                .padding(.top, 2)
             }
+
+            Spacer(minLength: 8)
+
+            // Kind and age live down the right edge, out of the reading column.
+            // They're the same two facts on every row, so putting them in a
+            // fixed place makes them scannable instead of something you have to
+            // read past to reach the next title.
+            VStack(alignment: .trailing, spacing: 4) {
+                KindBadge(kind: item.kind)
+                Text(item.createdAt.relativeShortDescription)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if item.isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.vertical, 4)
     }
