@@ -21,6 +21,7 @@ Built with SwiftUI + SwiftData (CloudKit mirroring), iOS 17+.
 | **Scan** | VisionKit's document scanner — edge detection and perspective correction, then OCR per page. |
 | **PDF** | Text layer extracted with PDFKit. If the PDF is a scan with no text layer, pages are rasterized and OCR'd. |
 | **Link** | A capture that is only a URL becomes a link with a readable `host — slug` title instead of a raw address. |
+| **Siri / Shortcuts** | *"Hey Siri, remember this in Brain Buddy."* The sentence is queued and the app never has to open — see below. |
 | **Share sheet** | "Brain Buddy" appears in any app's share sheet — links, selected text, photos, PDFs, files. |
 | **Anything else** | Stored intact with its filename indexed, rather than refused. |
 
@@ -179,6 +180,96 @@ Voice capture is built for the long case, not just the ten-second reminder:
 Any long memory can be summarized later, too: open it and the Summary section is
 there, including for OCR'd scans and imported PDFs.
 
+### Siri, Shortcuts and iPhone Search
+
+Two ways in and out of your brain that don't involve opening the app.
+
+**"Hey Siri, remember this in Brain Buddy."** The thought is caught at the moment
+you have it — walking, driving, halfway out the door — and that moment does not
+survive unlocking a phone, finding an app and waiting for a store to open. So the
+App Intent does the least possible work: it appends the sentence to a folder and
+returns. The app drains that folder on its next foreground pass, through the same
+`IngestService` path everything else uses, so a thought muttered at a traffic
+light gets the same title, keywords and embedding treatment as one typed at a
+desk. Nothing you say is ever waiting on a spinner, and nothing is lost if the
+intent's process is killed the moment it answers.
+
+Unlike the share extension's hand-off this queue lives in the app's **own**
+container rather than an App Group — nothing to configure, so it works in a fresh
+clone with no entitlements set up. Settings shows the count if anything is ever
+waiting, and offers to file it now.
+
+Two more phrases are registered: *"Ask Brain Buddy…"*, which opens the app with
+the question already run, and *"What's on today in Brain Buddy"*, which opens
+your brief. Those two need the whole retrieval stack, so they open the app; the
+one that matters most — capture — does not.
+
+**Your notes also turn up in iPhone Search.** Pull down on the Home Screen, type
+"cladding", and your own note is in the results next to your apps and your mail;
+tapping it opens that memory in the Brain tab. This is the difference between an
+app you have to remember to open and a brain that is simply *there*. Publishing
+happens at `IngestService.finalize` — the single point every capture and every
+edit passes through — so an edited note can never leave a stale entry behind, and
+trashing one removes it immediately. The index is local to the device and carries
+a title, a short summary and keywords: never attachments, never full transcripts.
+Settings has the switch, and turning it off actually deletes what was published
+rather than merely stopping new donations.
+
+### Connections
+
+Open any memory and the memories that belong with it are already there, each
+with the reason it was linked: *"Both tagged #site"*, *"Both mention cladding"*,
+*"Reads like the same subject"*.
+
+This is the part a folder can't do. You save a note in March and record a
+discussion in July and never connect them, because remembering to connect things
+is the work you downloaded a second brain to avoid. `ConnectionFinder` uses three
+signals, in order of how much they mean:
+
+1. **Shared tags** — you chose those words yourself, so nothing else is that
+   deliberate.
+2. **Shared uncommon words**, weighted by how rare they are *in your own
+   library*. This is what separates a real link from a coincidence: two notes
+   containing "cladding" are about the same thing, two notes containing "project"
+   are not. Rarity is measured against your library rather than a general word
+   list, because the words that mean nothing in *your* notes are the ones you
+   write constantly — a word appearing in half of everything you've saved is
+   furniture, and is ignored outright.
+3. **Meaning**, from the sentence embeddings already stored for search, with a
+   floor under it: unrelated English prose sits around 0.5 cosine, so anything
+   short of clearly-similar has to count for nothing.
+
+Weak links are **dropped rather than padded out** to fill the section. A wrong
+connection costs more than an empty space, because it teaches you not to trust
+the ones that are right. Scoring runs off the main actor over flattened
+`Sendable` values — the model objects never cross the boundary.
+
+### The review
+
+Today answers *"what now"*. The **Review** — one tap from Today, over 7 or 30
+days — answers *"how is this actually going"*, and it is the one thing in the app
+that speaks without being asked a question. So it has to earn the interruption:
+no streaks, no vanity metrics, no "you're doing great". Four things you can act
+on:
+
+- **Done** — what you closed, because closing things is invisible otherwise.
+- **Still open** — oldest first, with how long each has been sitting there. The
+  age is the useful number: a task open for nine days is a decision you have been
+  avoiding, and saying so is more useful than listing it.
+- **What you kept coming back to** — the subjects that recur across the period's
+  captures, which is usually not what you would have guessed. Built by the same
+  grouping as the brain boxes, so the two can never disagree about what your
+  subjects are.
+- **Questions you left hanging** — sentences you typed that end in a question
+  mark and never came back to. People note questions constantly and never revisit
+  them; a second brain that can't hand them back is losing the most valuable
+  thing it holds. Deliberately literal: a derived "this looks like a question"
+  would be wrong often enough to be annoying, and a typed question mark is you
+  saying so outright.
+
+It shares as **plain text**, because the useful thing to do with a review is
+paste it into the message you were already about to write.
+
 ### Brain boxes
 
 The **Brain** tab opens on a grid of boxes, and tapping one narrows the list
@@ -333,8 +424,11 @@ matters most — every summary line is quoted verbatim from the transcript), wha
 lands in a morning brief and what's correctly left out of it, the stored-summary
 round trip the brief depends on, which memories land in which brain box (and
 which subjects are too rare to earn one), the row-summary rule that stops a
-heading being repeated underneath itself, and a SwiftData schema smoke test
-(in-memory, no iCloud).
+heading being repeated underneath itself, which links `ConnectionFinder` will and
+won't make (including the one that matters — a word you write constantly links
+nothing), what a review reports over a fixed period, the Siri capture queue's
+never-lose-anything contract, what is and isn't published to iPhone Search, and a
+SwiftData schema smoke test (in-memory, no iCloud).
 
 `BriefBuilder` is tested against a fixed calendar date, so "what shows up in
 tomorrow's brief" is pinned down rather than dependent on when the suite runs.
@@ -345,7 +439,8 @@ tomorrow's brief" is pinned down rather than dependent on when the suite runs.
 
 ```
 BrainBuddy/
-  App/          BrainBuddyApp, AppServices (shared singletons), PersistenceController
+  App/          BrainBuddyApp, AppServices (shared singletons), PersistenceController,
+                BrainBuddyIntents (Siri / Shortcuts + the hand-off mailbox)
   Models/       MemoryItem, MemoryAttachment, MemoryTag, BriefEntry  (SwiftData + CloudKit),
                 BrainBox (how the Brain tab groups a library — no SwiftData, so it is testable)
   Search/       Tokenizer, BM25Index, VectorMath, EmbeddingService,
@@ -356,10 +451,12 @@ BrainBuddy/
                 CloudSyncMonitor
   Services/     … BriefBuilder (what goes in a brief) + BriefService (persistence),
                 NotificationScheduler, NotificationRouter
-  Services/     … SharedInbox (App Group hand-off from the extension)
-  Views/        RootView, TodayView, CaptureView (Input), VoiceCaptureView,
-                LibraryView (Brain), MemoryDetailView, AskView, SettingsView,
-                Components/
+  Services/     … SharedInbox (App Group hand-off from the extension),
+                QuickCaptureQueue (Siri hand-off), SpotlightIndexer (iPhone Search),
+                ConnectionFinder (automatic links), ReviewBuilder (the review)
+  Views/        RootView, TodayView, ReviewView, CaptureView (Input),
+                VoiceCaptureView, LibraryView (Brain), MemoryDetailView, AskView,
+                SettingsView, Components/
   Resources/    Assets.xcassets, PrivacyInfo.xcprivacy
 BrainBuddyShare/  ShareViewController — the share extension
 BrainBuddyTests/

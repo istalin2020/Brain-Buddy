@@ -1,3 +1,4 @@
+import CoreSpotlight
 import SwiftData
 import SwiftUI
 
@@ -50,10 +51,23 @@ struct RootView: View {
         // share sheet hand-off typically completes.
         .task {
             await services.ingest.drainSharedInbox(into: modelContext)
+            // Anything said to Siri while the app was closed. Filed before the
+            // brief is built, so a task you dictated this morning can appear in
+            // it straight away.
+            await services.ingest.drainQuickCaptures(into: modelContext)
+            services.collectPendingRequests()
+        }
+        // A Spotlight result for one of your memories opens that memory.
+        .onContinueUserActivity(CSSearchableItemActionType) { activity in
+            services.open(activity)
         }
         .onChange(of: scenePhase) { _, newValue in
             guard newValue == .active else { return }
-            Task { await services.ingest.drainSharedInbox(into: modelContext) }
+            Task {
+                await services.ingest.drainSharedInbox(into: modelContext)
+                await services.ingest.drainQuickCaptures(into: modelContext)
+                services.collectPendingRequests()
+            }
             // A phone left open across midnight should come back to the new day's
             // brief, not yesterday's.
             services.brief.generateIfNeeded(in: modelContext)
@@ -66,6 +80,18 @@ struct RootView: View {
             case .today: selection = .today
             }
             services.pendingDestination = nil
+        }
+        // A question asked through Siri lands on the tab that answers it;
+        // `AskView` runs it and clears it.
+        .onChange(of: services.pendingQuestion) { _, question in
+            guard question != nil else { return }
+            selection = .ask
+        }
+        // A memory opened from the device's own search shows up in the Brain
+        // tab, which pushes it and clears the request.
+        .onChange(of: services.pendingMemoryIdentifier) { _, identifier in
+            guard identifier != nil else { return }
+            selection = .library
         }
     }
 }

@@ -288,6 +288,33 @@ final class IngestService {
         return imported
     }
 
+    // MARK: - Quick capture hand-off
+
+    /// Files everything Siri, Shortcuts or a Home Screen action left behind.
+    ///
+    /// Same ordering rule as the shared inbox: the file is removed only after the
+    /// memory exists, so a kill mid-import costs a possible duplicate rather than
+    /// the capture itself.
+    @discardableResult
+    func drainQuickCaptures(into context: ModelContext) async -> Int {
+        let pending = QuickCaptureQueue.pending()
+        guard !pending.isEmpty else { return 0 }
+
+        var imported = 0
+        for file in pending {
+            activity = "Filing what you said"
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else {
+                QuickCaptureQueue.remove(file)
+                continue
+            }
+            if await saveNote(text: text, in: context) != nil { imported += 1 }
+            QuickCaptureQueue.remove(file)
+        }
+
+        activity = nil
+        return imported
+    }
+
     // MARK: - Capture entry points for the UI
 
     // The `save*` methods above hand back the item they created, because
@@ -360,6 +387,41 @@ final class IngestService {
 
         item.touch()
         save(context)
+
+        // Publishing to the system index happens here, at the one point every
+        // capture and every edit passes through, so an edited note can never
+        // leave a stale entry in Spotlight.
+        publishToSpotlight(item)
+    }
+
+    // MARK: - System search
+
+    /// Adds or refreshes one memory in the device's own search index.
+    ///
+    /// Snapshotted into a plain value first: `MemoryItem` is not `Sendable`, and
+    /// the index call has no business holding a model object.
+    func publishToSpotlight(_ item: MemoryItem) {
+        guard UserDefaults.standard.bool(forKey: PreferenceKey.systemSearch) else { return }
+        guard let record = SpotlightRecord(item) else {
+            SpotlightIndexer.remove(identifiers: [item.identifier])
+            return
+        }
+        SpotlightIndexer.donate([record])
+    }
+
+    /// Rebuilds the whole index. Offered in Settings, and used after the
+    /// preference is switched back on, since nothing was donated while it was
+    /// off.
+    @discardableResult
+    func rebuildSpotlightIndex(in context: ModelContext) -> Int {
+        SpotlightIndexer.removeEverything()
+        guard UserDefaults.standard.bool(forKey: PreferenceKey.systemSearch) else { return 0 }
+
+        let descriptor = FetchDescriptor<MemoryItem>(predicate: #Predicate { !$0.isTrashed })
+        guard let items = try? context.fetch(descriptor) else { return 0 }
+        let records = items.compactMap { SpotlightRecord($0) }
+        SpotlightIndexer.donate(records)
+        return records.count
     }
 
     // MARK: - Editing
@@ -407,25 +469,34 @@ final class IngestService {
         item.isTrashed = true
         item.touch()
         save(context)
+        // Out of the app means out of Spotlight: finding a trashed note in
+        // system search and tapping into an empty screen is worse than not
+        // finding it.
+        SpotlightIndexer.remove(identifiers: [item.identifier])
     }
 
     func restore(_ item: MemoryItem, in context: ModelContext) {
         item.isTrashed = false
         item.touch()
         save(context)
+        publishToSpotlight(item)
     }
 
     /// Permanent delete. Attachments cascade via the relationship delete rule.
     func deletePermanently(_ item: MemoryItem, in context: ModelContext) {
+        let identifier = item.identifier
         context.delete(item)
         save(context)
+        SpotlightIndexer.remove(identifiers: [identifier])
     }
 
     func emptyTrash(in context: ModelContext) {
         let descriptor = FetchDescriptor<MemoryItem>(predicate: #Predicate { $0.isTrashed })
         guard let trashed = try? context.fetch(descriptor) else { return }
+        let identifiers = trashed.map(\.identifier)
         trashed.forEach { context.delete($0) }
         save(context)
+        SpotlightIndexer.remove(identifiers: identifiers)
     }
 
     // MARK: - Internals

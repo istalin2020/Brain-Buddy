@@ -42,6 +42,10 @@ struct AskView: View {
             .navigationDestination(for: MemoryItem.self) { item in
                 MemoryDetailView(item: item)
             }
+            // A question can arrive from Siri before this view exists, so it is
+            // collected on appearance as well as on change.
+            .task { consumePendingQuestion() }
+            .onChange(of: services.pendingQuestion) { _, _ in consumePendingQuestion() }
             .onDisappear {
                 transcriber.cancelListening()
                 services.speaker.stop()
@@ -267,6 +271,13 @@ struct AskView: View {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    /// Runs a question handed over by Siri or the Shortcuts app, once.
+    private func consumePendingQuestion() {
+        guard let question = services.pendingQuestion else { return }
+        services.pendingQuestion = nil
+        ask(question)
     }
 
     private func clearResults() {

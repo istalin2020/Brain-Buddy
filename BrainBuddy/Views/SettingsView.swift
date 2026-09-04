@@ -19,9 +19,12 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.reminderCount) private var reminderCount = 7
     @AppStorage(PreferenceKey.transcriptionLocale) private var transcriptionLocale = ""
     @AppStorage(PreferenceKey.serverTranscription) private var serverTranscription = false
+    @AppStorage(PreferenceKey.systemSearch) private var systemSearch = true
 
     @State private var reindexProgress: Double?
     @State private var pendingSharedItems = 0
+    @State private var pendingQuickCaptures = 0
+    @State private var spotlightNotice: String?
 
     var body: some View {
         NavigationStack {
@@ -31,6 +34,7 @@ struct SettingsView: View {
                 searchSection
                 transcriptionSection
                 recordingSection
+                systemSearchSection
                 sharingSection
                 storageSection
                 maintenanceSection
@@ -39,6 +43,7 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .task {
                 pendingSharedItems = SharedInbox.pendingFiles().count
+                pendingQuickCaptures = QuickCaptureQueue.pendingCount
                 await services.syncMonitor.refresh()
                 await services.notifications.refresh()
             }
@@ -49,6 +54,7 @@ struct SettingsView: View {
             .onChange(of: semanticSearch) { _, _ in services.applyPreferences() }
             .onChange(of: autoStopDictation) { _, _ in services.applyPreferences() }
             .onChange(of: backgroundRecording) { _, _ in services.applyPreferences() }
+            .onChange(of: systemSearch) { _, isOn in applySystemSearch(isOn) }
         }
     }
 
@@ -242,6 +248,51 @@ struct SettingsView: View {
         }
     }
 
+    /// System search and Siri, together: both are ways of reaching your brain
+    /// without opening the app, and both are worth telling people exist.
+    private var systemSearchSection: some View {
+        Section {
+            Toggle("Find my notes in iPhone Search", isOn: $systemSearch)
+
+            if systemSearch {
+                Button {
+                    rebuildSpotlight()
+                } label: {
+                    Label("Re-publish everything to iPhone Search", systemImage: "magnifyingglass.circle")
+                }
+            }
+
+            if let spotlightNotice {
+                Text(spotlightNotice)
+                    .font(.caption)
+                    .foregroundStyle(Color.accentColor)
+            }
+
+            if pendingQuickCaptures > 0 {
+                LabeledContent("Said to Siri, not yet filed", value: "\(pendingQuickCaptures)")
+                Button("File them now") {
+                    Task {
+                        await services.ingest.drainQuickCaptures(into: modelContext)
+                        pendingQuickCaptures = QuickCaptureQueue.pendingCount
+                    }
+                }
+            }
+        } header: {
+            Text("Siri & iPhone Search")
+        } footer: {
+            Text("""
+            Say “Remember this in Brain Buddy” and the thought is saved without the \
+            app opening — it's filed, titled and indexed the next time you do open \
+            it. “Ask Brain Buddy” opens the answer, and “What's on today in Brain \
+            Buddy” opens your brief.
+
+            \(systemSearch
+              ? "Your memories also appear when you pull down on the Home Screen and type. The index is local to this iPhone and holds a title, a short summary and keywords — never attachments or full transcripts."
+              : "Your memories are hidden from iPhone Search. They stay searchable inside the app.")
+            """)
+        }
+    }
+
     private var sharingSection: some View {
         Section {
             LabeledContent(
@@ -317,6 +368,24 @@ struct SettingsView: View {
             services.search.invalidateCache()
             reindexProgress = nil
         }
+    }
+
+    /// Turning the preference off has to remove what was already published, or
+    /// "hidden from iPhone Search" would be a claim rather than a fact.
+    private func applySystemSearch(_ isOn: Bool) {
+        if isOn {
+            rebuildSpotlight()
+        } else {
+            SpotlightIndexer.removeEverything()
+            spotlightNotice = "Removed from iPhone Search."
+        }
+    }
+
+    private func rebuildSpotlight() {
+        let count = services.ingest.rebuildSpotlightIndex(in: modelContext)
+        spotlightNotice = count == 1
+            ? "1 memory published to iPhone Search."
+            : "\(count) memories published to iPhone Search."
     }
 }
 

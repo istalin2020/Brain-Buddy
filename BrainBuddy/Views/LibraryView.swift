@@ -20,8 +20,12 @@ struct LibraryView: View {
     /// memory is two `NLTagger` passes each — cheap once, ruinous per redraw.
     @State private var index = BrainBoxIndex()
 
+    /// Owned rather than implicit, so a memory tapped in the device's own search
+    /// can be pushed from outside this view.
+    @State private var path: [MemoryItem] = []
+
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             // Resolved once per body pass: ranking the whole library is far too
             // expensive to run again for the empty check and the row count.
             let items = displayedItems
@@ -65,7 +69,20 @@ struct LibraryView: View {
             }
             // Rebuilt when the library changes rather than on every redraw.
             .task(id: librarySignature) { rebuildBoxes() }
+            // Set when a Spotlight result is tapped. Collected on appearance
+            // too, because the request usually arrives before this tab exists.
+            .task { openPendingMemory() }
+            .onChange(of: services.pendingMemoryIdentifier) { _, _ in openPendingMemory() }
         }
+    }
+
+    /// Pushes the memory the system search asked for, once.
+    private func openPendingMemory() {
+        guard let identifier = services.pendingMemoryIdentifier else { return }
+        services.pendingMemoryIdentifier = nil
+        guard let match = allMemories.first(where: { $0.identifier == identifier }) else { return }
+        // Replaces whatever was on screen: you asked for this note by name.
+        path = [match]
     }
 
     /// Changes when anything that could move a memory between boxes changes.

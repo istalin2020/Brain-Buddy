@@ -11,6 +11,12 @@ struct MemoryDetailView: View {
 
     @Bindable var item: MemoryItem
 
+    /// The whole library, used only to work out what this memory connects to.
+    /// Same query the other tabs run, so it costs a fetch that is already warm.
+    @Query(filter: #Predicate<MemoryItem> { !$0.isTrashed })
+    private var library: [MemoryItem]
+
+    @State private var connections: [RelatedMemory] = []
     @State private var isEditing = false
     @State private var newTag = ""
     @State private var showExtractedText = false
@@ -25,6 +31,7 @@ struct MemoryDetailView: View {
             summarySection
             if !item.sortedAttachments.isEmpty { attachmentSection }
             if !item.extractedText.isEmpty { extractedSection }
+            connectionSection
             tagSection
             metadataSection
             actionSection
@@ -40,6 +47,9 @@ struct MemoryDetailView: View {
                 }
             }
         }
+        // Recomputed when you open a different memory, when this one is edited,
+        // and when the library grows — not on every redraw.
+        .task(id: connectionSignature) { await rebuildConnections() }
         .sheet(item: $pdfPreview) { attachment in
             NavigationStack {
                 Group {
@@ -205,6 +215,39 @@ struct MemoryDetailView: View {
         }
     }
 
+    /// Memories this one belongs with, found without anybody linking anything.
+    ///
+    /// Absent when nothing clears the bar rather than padded with near-misses:
+    /// see `ConnectionFinder` for why a wrong link costs more than an empty
+    /// space.
+    @ViewBuilder
+    private var connectionSection: some View {
+        if !connections.isEmpty {
+            Section {
+                ForEach(connections) { related in
+                    NavigationLink(value: related.item) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(related.item.displayTitle)
+                                .font(.subheadline.weight(.medium))
+                                .lineLimit(2)
+                            HStack(spacing: 6) {
+                                Text(related.reason)
+                                    .foregroundStyle(Color.accentColor)
+                                Text(related.item.createdAt.filedDateDescription)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .font(.caption)
+                        }
+                    }
+                }
+            } header: {
+                Label("Connected in your brain", systemImage: "point.3.filled.connected.trianglepath.dotted")
+            } footer: {
+                Text("Found from shared tags, shared uncommon words and meaning — you don't have to link anything yourself.")
+            }
+        }
+    }
+
     private var actionSection: some View {
         Section {
             Toggle(isOn: Binding(
@@ -282,6 +325,39 @@ struct MemoryDetailView: View {
         Task { await services.ingest.setSummary(text, on: item, in: modelContext) }
     }
 
+    // MARK: - Connections
+
+    private var connectionSignature: String {
+        "\(item.identifier)-\(library.count)-\(Int(item.updatedAt.timeIntervalSince1970))"
+    }
+
+    /// Snapshots to plain values on the main actor, then scores off it.
+    ///
+    /// Cosine similarity across a whole library is real arithmetic, and
+    /// `MemoryItem` is not `Sendable`, so the model never crosses the boundary —
+    /// only the flattened candidates do, and only identifiers come back.
+    private func rebuildConnections() async {
+        let subject = ConnectionCandidate(item)
+        let candidates = library.map(ConnectionCandidate.init)
+        guard candidates.count > 1 else {
+            connections = []
+            return
+        }
+
+        let found = await Task.detached(priority: .utility) {
+            ConnectionFinder.related(to: subject, among: candidates)
+        }.value
+
+        let byIdentifier = Dictionary(
+            library.map { ($0.identifier, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        connections = found.compactMap { connection in
+            guard let match = byIdentifier[connection.id] else { return nil }
+            return RelatedMemory(item: match, reason: connection.reason)
+        }
+    }
+
     // MARK: - Actions
 
     /// Editing text changes what the note means, so the index is rebuilt rather
@@ -305,6 +381,14 @@ struct MemoryDetailView: View {
     private func remove(tag name: String) {
         services.ingest.setTags(item.tagNames.filter { $0 != name }, on: item, in: modelContext)
     }
+}
+
+/// A found link, ready to render.
+private struct RelatedMemory: Identifiable {
+    let item: MemoryItem
+    let reason: String
+
+    var id: UUID { item.identifier }
 }
 
 /// Renders one attachment inline: images preview, audio plays, PDFs open.

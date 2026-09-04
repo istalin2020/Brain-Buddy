@@ -54,6 +54,18 @@ struct TodayView: View {
             .navigationDestination(for: MemoryItem.self) { item in
                 MemoryDetailView(item: item)
             }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    // Today answers "what now"; the review answers "how is it
+                    // actually going", which is a different question and belongs
+                    // one tap away rather than on the same screen.
+                    NavigationLink {
+                        ReviewView()
+                    } label: {
+                        Label("Review", systemImage: "chart.bar.doc.horizontal")
+                    }
+                }
+            }
             // The brief is built here rather than at 8 am by a background task,
             // because iOS grants no guaranteed slot at a fixed time. The 8 am
             // notification is the alarm; this is the work, and it takes

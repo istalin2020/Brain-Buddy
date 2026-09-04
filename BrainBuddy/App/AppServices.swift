@@ -15,6 +15,9 @@ enum PreferenceKey {
     static let morningBriefMinute = "settings.morningBriefMinute"
     /// How many reminders a day carry an open task.
     static let reminderCount = "settings.reminderCount"
+    /// Whether memories are published to the device's own search index, so they
+    /// turn up when you pull down on the Home Screen.
+    static let systemSearch = "settings.systemSearch"
     /// Locale identifier for speech recognition; empty means the device language.
     static let transcriptionLocale = "settings.transcriptionLocale"
     /// Whether transcription may use Apple's servers instead of the on-device
@@ -45,6 +48,14 @@ final class AppServices {
     /// it and clears it.
     var pendingDestination: AppDestination?
 
+    /// A question that arrived from Siri or Shortcuts. `AskView` runs it and
+    /// clears it.
+    var pendingQuestion: String?
+
+    /// A memory the user tapped in the device's own search results. The Brain
+    /// tab pushes it and clears it.
+    var pendingMemoryIdentifier: UUID?
+
     /// `UNUserNotificationCenter.delegate` is weak, so something has to hold it.
     private var notificationRouter: NotificationRouter?
 
@@ -63,6 +74,10 @@ final class AppServices {
             PreferenceKey.morningBriefHour: 8,
             PreferenceKey.morningBriefMinute: 0,
             PreferenceKey.reminderCount: 7,
+            // On by default. The index is local to the device and holds a title,
+            // a short summary and keywords — and being findable from the Home
+            // Screen is most of what makes this app worth having.
+            PreferenceKey.systemSearch: true,
             PreferenceKey.transcriptionLocale: "",
             // Off by default: everything else in this app stays on the device,
             // and sending recordings to a server should be a decision, not a
@@ -158,6 +173,22 @@ final class AppServices {
         await notifications.refresh()
         guard notifications.authorization == .notDetermined, !notifications.hasRequestedPermission else { return }
         await applyMorningBriefPreference()
+    }
+
+    // MARK: - Requests from outside the app
+
+    /// Collects anything Siri or Shortcuts left behind while the app wasn't
+    /// showing. Called at launch and on every return to the foreground, because
+    /// an intent can run minutes before there is a view to hand a request to.
+    func collectPendingRequests() {
+        if let question = IntentHandOff.takeQuestion() { pendingQuestion = question }
+        if let destination = IntentHandOff.takeDestination() { pendingDestination = destination }
+    }
+
+    /// Handles a tap on one of this app's results in the device's search.
+    func open(_ activity: NSUserActivity) {
+        guard let identifier = SpotlightIndexer.memoryIdentifier(from: activity) else { return }
+        pendingMemoryIdentifier = identifier
     }
 
     /// Warms the embedding model so the first search isn't the slow one.
