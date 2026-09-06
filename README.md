@@ -106,7 +106,17 @@ than showing nothing, because it looks like a fact you can tick off. Lines are
 now matched against the note's current wording and **updated in place**: what
 you closed stays closed, a carried-over task keeps its history, and a rewritten
 note retires its old line and gets a new one. It runs the moment you finish
-editing, and again on Refresh so edits made on another device are caught too.
+editing — including when you leave the screen without pressing Done, which is a
+real thing people do — and on **every open and return to the foreground**, not
+only on Refresh. "Today's brief is already built" stops new lines being proposed
+twice in a day; it must not stop existing ones catching up, which is exactly how
+an edit at 11:34 stayed invisible behind a brief built at 11:26.
+
+Timestamps are the fast path, not the truth: a line is also re-read when its own
+words are **no longer in the note**, compared on normalized tokens. That catches
+an edit merged in from another device, a line written by an older build, or an
+`updatedAt` that never moved — and because tidying punctuation leaves tokens
+identical, a tidied line never looks edited and can't reconcile on a loop.
 Two rules stop it doing damage — a note that yields nothing the builder
 recognizes has its lines *left alone*, and a line is only retired if its own
 section still produces others. Losing a task you were relying on is far worse

@@ -38,14 +38,39 @@ final class BriefService {
 
     /// Builds today's brief if it hasn't been built yet. Returns how many lines
     /// were added.
+    ///
+    /// "Already built" stops new lines being *proposed* twice in a day. It must
+    /// not stop existing lines catching up with their notes: edit a note at
+    /// 11:34 after the brief was built at 11:26 and skipping the whole pass left
+    /// Today quoting the old figure until Refresh was pressed by hand — which
+    /// nobody should have to know to do. So the reconciliation half always runs,
+    /// on every open and every return to the foreground.
     @discardableResult
     func generateIfNeeded(for now: Date = Date(), in context: ModelContext) -> Int {
         if let built = UserDefaults.standard.object(forKey: Self.lastBuiltKey) as? Date,
            calendar.isDate(built, inSameDayAs: now) {
             lastBuiltAt = built
+            updatedCount = reconcileAll(for: now, in: context)
             return 0
         }
         return generate(for: now, in: context)
+    }
+
+    /// The reconciliation half of a build on its own: lines catch up with the
+    /// notes they were quoted from, and nothing new is proposed.
+    ///
+    /// Cheap enough for every app activation — a fetch, plus a re-read of only
+    /// those notes whose lines are actually out of date.
+    @discardableResult
+    func reconcileAll(for now: Date = Date(), in context: ModelContext) -> Int {
+        guard let memories = fetchMemories(in: context) else { return 0 }
+        let changed = refreshEditedLines(
+            around: calendar.startOfDay(for: now),
+            memories: memories,
+            in: context
+        )
+        if changed > 0 { save(context) }
+        return changed
     }
 
     /// Rebuilds today's brief unconditionally — the Refresh action, and what runs
@@ -182,11 +207,30 @@ final class BriefService {
         )
 
         var grouped: [UUID: [BriefEntry]] = [:]
+        // Tokenized at most once per note, and only for notes that have lines.
+        var sourceTokens: [UUID: Set<String>] = [:]
+
         for entry in entries {
             guard let identifier = entry.sourceIdentifier,
-                  let memory = byIdentifier[identifier],
-                  memory.updatedAt > entry.createdAt
+                  let memory = byIdentifier[identifier]
             else { continue }
+
+            if memory.updatedAt <= entry.createdAt {
+                // Timestamps are the fast path, not the truth. An edit merged in
+                // from another device, a line made by an older version of the
+                // app, a `updatedAt` that never moved — any of those leave a
+                // line stale with nothing in the dates to show it. So fall back
+                // to the thing that actually matters: are this line's words
+                // still in the note?
+                if sourceTokens[identifier] == nil {
+                    let body = [memory.text, memory.summary]
+                        .filter { !$0.isEmpty }
+                        .joined(separator: "\n")
+                    sourceTokens[identifier] = Set(Tokenizer.tokens(in: body))
+                }
+                guard !Self.isStillQuoted(entry, in: sourceTokens[identifier] ?? []) else { continue }
+            }
+
             grouped[identifier, default: []].append(entry)
         }
 
@@ -289,6 +333,19 @@ final class BriefService {
             changed += 1
         }
         return changed
+    }
+
+    /// Whether every word of this line is still somewhere in the note it was
+    /// quoted from.
+    ///
+    /// Compared on normalized tokens rather than on the string, which is what
+    /// keeps this stable: tidying punctuation leaves the tokens identical, so a
+    /// tidied line doesn't look edited and can't reconcile on a loop — while
+    /// 54,000 becoming 60,000 changes a token and shows up immediately.
+    nonisolated static func isStillQuoted(_ entry: BriefEntry, in sourceTokens: Set<String>) -> Bool {
+        let terms = Set(Tokenizer.tokens(in: entry.text))
+        guard !terms.isEmpty else { return true }
+        return terms.isSubset(of: sourceTokens)
     }
 
     /// How alike two lines have to be to count as the same line, reworded.

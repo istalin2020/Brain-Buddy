@@ -50,6 +50,15 @@ struct MemoryDetailView: View {
         // Recomputed when you open a different memory, when this one is edited,
         // and when the library grows — not on every redraw.
         .task(id: connectionSignature) { await rebuildConnections() }
+        // Leaving mid-edit is a real thing people do: the text field has already
+        // written to the model, so tapping back without pressing Done would
+        // otherwise re-index nothing and leave the brief quoting the old
+        // wording.
+        .onDisappear {
+            guard isEditing else { return }
+            isEditing = false
+            commitEdits()
+        }
         .sheet(item: $pdfPreview) { attachment in
             NavigationStack {
                 Group {

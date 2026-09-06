@@ -138,6 +138,52 @@ final class BriefResyncTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(entries().first).text.contains("60,000"))
     }
 
+    /// The reason the fix didn't reach the screen the first time: today's brief
+    /// had already been built, so opening the app skipped the whole pass and the
+    /// row went on quoting the old figure until Refresh was pressed by hand.
+    func testAlreadyBuiltTodayStillCatchesUpOnOpen() throws {
+        let item = insert("Al Qersh confirmed to do the sparing work with 54,000 Omani rial")
+        brief.generate(in: context)
+
+        item.text = "Al Qersh confirmed to do the sparing work with 60,000 Omani rial"
+        item.touch()
+
+        // What TodayView runs when it appears, and RootView on every return to
+        // the foreground.
+        XCTAssertEqual(brief.generateIfNeeded(in: context), 0, "Nothing new to propose")
+        XCTAssertEqual(brief.updatedCount, 1)
+        XCTAssertTrue(try XCTUnwrap(entries().first).text.contains("60,000"))
+    }
+
+    /// Timestamps are the fast path, not the truth — an edit merged from another
+    /// device, or a line made by an older build, can leave `updatedAt` no newer
+    /// than the line. The words themselves settle it.
+    func testAStaleLineIsCaughtWhenTheTimestampDidNotMove() throws {
+        let item = insert("Al Qersh confirmed to do the sparing work with 54,000 Omani rial")
+        brief.generate(in: context)
+
+        // Deliberately no touch(): updatedAt stays older than the line.
+        item.text = "Al Qersh confirmed to do the sparing work with 60,000 Omani rial"
+        XCTAssertLessThanOrEqual(item.updatedAt, try XCTUnwrap(entries().first).createdAt)
+
+        XCTAssertEqual(brief.reconcileAll(in: context), 1)
+        XCTAssertTrue(try XCTUnwrap(entries().first).text.contains("60,000"))
+
+        // And it settles: a line that matches its note is not "updated" again on
+        // every pass.
+        XCTAssertEqual(brief.reconcileAll(in: context), 0)
+    }
+
+    /// Tidying punctuation must not read as an edit, or every pass would report
+    /// updates forever.
+    func testTidyingSettlesInsteadOfLooping() throws {
+        _ = insert("Took video record ..they will put on TV")
+        brief.generate(in: context)
+        XCTAssertTrue(try XCTUnwrap(entries().first).text.contains("…"))
+
+        XCTAssertEqual(brief.reconcileAll(in: context), 0)
+    }
+
     func testAnUntouchedNoteIsLeftCompletelyAlone() throws {
         _ = insert("Prepare the PPT for the hackathon")
         brief.generate(in: context)
