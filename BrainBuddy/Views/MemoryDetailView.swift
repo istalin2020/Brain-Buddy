@@ -258,7 +258,7 @@ struct MemoryDetailView: View {
             }
 
             Button {
-                Task { await services.ingest.finalize(item, in: modelContext, activity: "Re-indexing") }
+                Task { await services.applyEdit(to: item, in: modelContext) }
             } label: {
                 Label("Rebuild search index", systemImage: "arrow.clockwise")
             }
@@ -322,7 +322,13 @@ struct MemoryDetailView: View {
     private func save(_ summary: DiscussionSummarizer.Summary) {
         let text = summary.text
         draftSummary = nil
-        Task { await services.ingest.setSummary(text, on: item, in: modelContext) }
+        Task {
+            await services.ingest.setSummary(text, on: item, in: modelContext)
+            // A saved summary is where this memory's follow-ups now come from,
+            // so any brief line quoted from its raw transcript is out of date.
+            services.brief.resync(item, in: modelContext)
+            await services.refreshReminders(in: modelContext)
+        }
     }
 
     // MARK: - Connections
@@ -368,7 +374,9 @@ struct MemoryDetailView: View {
         if !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             item.hasCustomTitle = true
         }
-        Task { await services.ingest.finalize(item, in: modelContext, activity: "Re-indexing") }
+        // Not just the search index: the brief quotes this note, and a quote of
+        // text you have just corrected has to be corrected with it.
+        Task { await services.applyEdit(to: item, in: modelContext) }
     }
 
     private func addTag() {

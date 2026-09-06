@@ -122,7 +122,7 @@ enum Headline {
     private static let maximumStrippedWords = 5
 
     static func condense(_ sentence: String) -> String? {
-        var words = sentence
+        var words = BriefText.clean(sentence)
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
         guard !words.isEmpty else { return nil }
@@ -143,14 +143,12 @@ enum Headline {
         return clipped.capitalizedFirst
     }
 
-    /// Prefers to end at a comma, which in speech usually marks the end of the
-    /// first complete thought — "Close the excess tower material approval from
-    /// PCH" rather than that plus half of whatever came next.
+    /// Prefers to end at a clause break, which in speech usually marks the end
+    /// of the first complete thought — "Close the excess tower material approval
+    /// from PCH" rather than that plus half of whatever came next.
     private static func clip(_ text: String) -> String {
-        if let comma = text.firstIndex(of: ","),
-           text.distance(from: text.startIndex, to: comma) >= minimumLength,
-           text.distance(from: text.startIndex, to: comma) <= maximumLength {
-            return String(text[text.startIndex..<comma])
+        if let comma = clauseBreak(in: text) {
+            return trimmedTail(String(text[text.startIndex..<comma]))
         }
         guard text.count > maximumLength else { return trimmedTail(text) }
 
@@ -161,12 +159,31 @@ enum Headline {
         return trimmedTail(String(cut)) + "…"
     }
 
-    /// Drops trailing punctuation so a headline doesn't end in a stray comma.
-    private static func trimmedTail(_ text: String) -> String {
-        var value = text
-        while let last = value.last, last.isPunctuation || last.isWhitespace {
-            value.removeLast()
+    /// The first comma that ends a clause, within the useful range.
+    ///
+    /// A comma only counts when whitespace follows it. Without that rule a
+    /// thousands separator reads as the end of a thought, and *"…the sparing
+    /// work with 60,000 Omani rial"* becomes a headline promising **60**. Same
+    /// class of bug as a decimal point ending a sentence, and the same reason it
+    /// matters: a heading that silently drops four digits looks like a fact.
+    private static func clauseBreak(in text: String) -> String.Index? {
+        var index = text.startIndex
+        while let comma = text[index...].firstIndex(of: ",") {
+            let next = text.index(after: comma)
+            let breaksClause = next == text.endIndex || text[next].isWhitespace
+            let offset = text.distance(from: text.startIndex, to: comma)
+
+            if offset > maximumLength { return nil }
+            if breaksClause, offset >= minimumLength { return comma }
+            guard next < text.endIndex else { return nil }
+            index = next
         }
-        return value
+        return nil
+    }
+
+    /// Drops trailing punctuation, and a connective the line was left dangling
+    /// on: a heading ending in "with" is a sentence that stopped, not a heading.
+    private static func trimmedTail(_ text: String) -> String {
+        BriefText.trimEdges(text)
     }
 }

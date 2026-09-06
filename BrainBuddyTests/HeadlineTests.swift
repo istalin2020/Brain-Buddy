@@ -130,4 +130,34 @@ final class HeadlineTests: XCTestCase {
             "Buy milk on the way home"
         )
     }
+
+    // MARK: - Numbers survive
+
+    /// A thousands separator is not the end of a clause. Cutting there produced
+    /// a heading promising 60 for a note that said 60,000 — the same class of
+    /// mistake as a decimal point ending a sentence, and the same reason it
+    /// matters: it reads as a fact.
+    func testAThousandsSeparatorDoesNotEndTheHeadline() throws {
+        let condensed = try XCTUnwrap(
+            Headline.condense("Al Qersh confirmed to do the sparing work with 60,000 Omani rial")
+        )
+        XCTAssertTrue(condensed.contains("60,000"), "got “\(condensed)”")
+    }
+
+    /// A real clause break still wins, so the tightening this was built for
+    /// keeps working.
+    func testACommaFollowedBySpaceStillEndsTheHeadline() throws {
+        let condensed = try XCTUnwrap(
+            Headline.condense("Close the tower material approval, keep this a top priority")
+        )
+        XCTAssertEqual(condensed, "Close the tower material approval")
+    }
+
+    /// "…with" is a sentence that stopped, not a heading.
+    func testAHeadlineNeverEndsOnADanglingConnective() throws {
+        let condensed = try XCTUnwrap(
+            Headline.condense("Send the drawings to the consultant with")
+        )
+        XCTAssertFalse(condensed.hasSuffix("with"), "got “\(condensed)”")
+    }
 }

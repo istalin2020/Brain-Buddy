@@ -20,8 +20,7 @@ final class BriefBuilderTests: XCTestCase {
             title: title,
             text: text,
             summary: summary,
-            createdAt: calendar.date(byAdding: .day, value: -daysAgo, to: today)!,
-            kindTitle: "Note"
+            createdAt: calendar.date(byAdding: .day, value: -daysAgo, to: today)!
         )
     }
 
@@ -117,8 +116,7 @@ final class BriefBuilderTests: XCTestCase {
             title: "A note",
             text: text,
             summary: "",
-            createdAt: calendar.date(byAdding: .day, value: -daysAgo, to: realToday)!,
-            kindTitle: "Note"
+            createdAt: calendar.date(byAdding: .day, value: -daysAgo, to: realToday)!
         )
     }
 
@@ -182,15 +180,16 @@ final class BriefBuilderTests: XCTestCase {
                 text: sentence,
                 summary: "",
                 createdAt: calendar.date(byAdding: .day, value: -1, to: today)!,
-                kindTitle: "Voice note"
+                kind: .voice
             )],
             calendar: calendar
         )
 
         let task = try XCTUnwrap(candidates.first { $0.kind == .task })
         XCTAssertNotEqual(task.detail, sentence)
-        XCTAssertTrue(task.detail.contains("Voice note"), "got “\(task.detail)”")
-        XCTAssertTrue(task.detail.contains("yesterday"), "got “\(task.detail)”")
+        // Says how this reached your brain, as a phrase rather than two labels
+        // bolted together: "Recorded yesterday", not "Voice note · yesterday".
+        XCTAssertEqual(task.detail, "Recorded yesterday")
     }
 
     /// When the title genuinely says something else, it's the more useful subtitle.
@@ -203,7 +202,7 @@ final class BriefBuilderTests: XCTestCase {
                 text: "Lots of ground covered. I have to close the approval this week.",
                 summary: "",
                 createdAt: today,
-                kindTitle: "Voice note"
+                kind: .voice
             )],
             calendar: calendar
         )
@@ -270,7 +269,6 @@ final class BriefBuilderTests: XCTestCase {
                 text: "The wifi password is 12345",
                 createdAt: today,
                 kind: .note,
-                kindTitle: "Note",
                 tags: ["note"]
             )],
             calendar: calendar
@@ -288,8 +286,7 @@ final class BriefBuilderTests: XCTestCase {
                 title: "Voice note",
                 text: rambling,
                 createdAt: calendar.date(byAdding: .day, value: -1, to: today)!,
-                kind: .voice,
-                kindTitle: "Voice note"
+                kind: .voice
             )],
             calendar: calendar
         )
@@ -307,7 +304,6 @@ final class BriefBuilderTests: XCTestCase {
                 text: long,
                 createdAt: calendar.date(byAdding: .day, value: -1, to: today)!,
                 kind: .voice,
-                kindTitle: "Voice note",
                 tags: ["todo"]
             )],
             calendar: calendar
@@ -453,7 +449,7 @@ final class BriefBuilderTests: XCTestCase {
             text: "",
             summary: "",
             createdAt: today,
-            kindTitle: "Document"
+            kind: .document
         )
         XCTAssertTrue(BriefBuilder.build(for: today, from: [scanned], calendar: calendar).isEmpty)
     }

@@ -11,7 +11,6 @@ struct BriefSource {
     let summary: String
     let createdAt: Date
     let kind: MemoryKind
-    let kindTitle: String
     let tags: [String]
 
     init(
@@ -21,7 +20,6 @@ struct BriefSource {
         summary: String = "",
         createdAt: Date,
         kind: MemoryKind = .note,
-        kindTitle: String = "Note",
         tags: [String] = []
     ) {
         self.identifier = identifier
@@ -30,7 +28,6 @@ struct BriefSource {
         self.summary = summary
         self.createdAt = createdAt
         self.kind = kind
-        self.kindTitle = kindTitle
         self.tags = tags
     }
 }
@@ -212,16 +209,28 @@ enum BriefBuilder {
 
     // MARK: - Subject lines
 
-    /// A short subject for a line that is too long to scan.
+    /// Anything longer than this gets a heading of its own. A brief is read
+    /// standing up in a few seconds, and a line of two dozen words is accurate
+    /// and unreadable at that speed.
+    static let headlineThreshold = 46
+
+    /// A heading has to be this much shorter than the line to be worth the row
+    /// it takes. Otherwise it's the same sentence twice, once in bold.
+    static let headlineSavings = 0.8
+
+    /// A short subject for a line that is too long to scan, with the exact quote
+    /// kept underneath it.
     ///
-    /// A brief is read standing up, in a few seconds. A quoted sentence of
-    /// eighty-plus words is accurate and useless at that length, so long lines
-    /// get a heading and keep the quote underneath. Short lines get nothing —
-    /// two near-identical strings stacked on each other is worse than one.
+    /// Two rules earn their keep here. The heading has to be **meaningfully**
+    /// shorter — a 60-character line "condensed" to 58 helps nobody — and it has
+    /// to still read as a phrase, which is what `Headline` and `BriefText` are
+    /// for: no trailing "with", no doubled full stops, no number cut off at its
+    /// thousands separator.
     private static func headline(for line: String) -> String {
-        guard line.count > Headline.maximumLength + 8 else { return "" }
+        guard line.count > headlineThreshold else { return "" }
         let derived = Headline.from(line, fallback: "")
         guard !derived.isEmpty, derived != line else { return "" }
+        guard Double(derived.count) <= Double(line.count) * headlineSavings else { return "" }
         return derived
     }
 
@@ -236,12 +245,25 @@ enum BriefBuilder {
     /// tells you something the line doesn't.
     private static func detail(for source: BriefSource, line: String, on day: Date) -> String {
         let title = source.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let when = AnswerComposer.relativeDescription(for: source.createdAt, now: day)
-
         guard !title.isEmpty, !restates(title, line) else {
-            return "\(source.kindTitle) · \(when)"
+            return provenance(for: source, on: day)
         }
         return title
+    }
+
+    /// "Noted yesterday", "Recorded on Tuesday" — how this reached your brain,
+    /// as a phrase rather than a pair of labels bolted together with a dot.
+    /// "Note · yesterday" is a database row; this is a sentence fragment a
+    /// person would write.
+    static func provenance(for source: BriefSource, on day: Date) -> String {
+        let when = AnswerComposer.relativeDescription(for: source.createdAt, now: day)
+        switch source.kind {
+        case .note: return "Noted \(when)"
+        case .voice: return "Recorded \(when)"
+        case .image: return "Photographed \(when)"
+        case .document: return "Imported \(when)"
+        case .link: return "Saved \(when)"
+        }
     }
 
     /// Whether a title says the same thing as the line, allowing for the
@@ -297,9 +319,11 @@ enum BriefBuilder {
         ranges: [Range<String.Index>]
     ) -> String {
         let sentence = ranges.first { $0.contains(range.lowerBound) }.map { String(text[$0]) } ?? text
-        return AnswerComposer.tighten(
-            sentence.trimmingCharacters(in: CharacterSet(charactersIn: ".!?").union(.whitespacesAndNewlines)),
-            limit: 200
+        return BriefText.clean(
+            AnswerComposer.tighten(
+                sentence.trimmingCharacters(in: CharacterSet(charactersIn: ".!?").union(.whitespacesAndNewlines)),
+                limit: 200
+            )
         )
     }
 
@@ -316,7 +340,8 @@ enum BriefBuilder {
 
         for source in sources where source.createdAt >= cutoff {
             for sentence in taskSentences(in: source) {
-                let line = AnswerComposer.tighten(sentence, limit: 200)
+                let line = BriefText.clean(AnswerComposer.tighten(sentence, limit: 200))
+                guard BriefText.carriesSubstance(line) else { continue }
                 let key = BriefEntry.dedupeKey(for: line)
                 guard !key.isEmpty, claimed.insert(key).inserted else { continue }
                 candidates.append(BriefCandidate(
@@ -382,7 +407,12 @@ enum BriefBuilder {
         for source in sources where source.createdAt >= cutoff {
             guard let summary = DiscussionSummarizer.parse(source.summary) else { continue }
             for point in summary.keyPoints {
-                let line = AnswerComposer.tighten(point, limit: 200)
+                let line = BriefText.clean(AnswerComposer.tighten(point, limit: 200))
+                // A key point has to say something. "29th September mostly 11:50
+                // AM" is a timestamp that reached this section by being a
+                // sentence in a transcript, and it is no use to anybody reading
+                // their morning brief.
+                guard BriefText.carriesSubstance(line) else { continue }
                 let key = BriefEntry.dedupeKey(for: line)
                 guard !key.isEmpty, claimed.insert(key).inserted else { continue }
                 candidates.append(BriefCandidate(

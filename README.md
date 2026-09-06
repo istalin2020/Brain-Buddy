@@ -99,6 +99,37 @@ from: a task carried over from last week and ticked this morning was completed
 *today*, and filing it under last week is how it would vanish with no way to
 reopen it.
 
+**Edit the note and the line changes with it.** A brief was a snapshot of what
+a note said the morning it was first noticed, so correcting a figure from 54,000
+to 60,000 left Today quoting 54,000 for as long as the line stayed open — worse
+than showing nothing, because it looks like a fact you can tick off. Lines are
+now matched against the note's current wording and **updated in place**: what
+you closed stays closed, a carried-over task keeps its history, and a rewritten
+note retires its old line and gets a new one. It runs the moment you finish
+editing, and again on Refresh so edits made on another device are caught too.
+Two rules stop it doing damage — a note that yields nothing the builder
+recognizes has its lines *left alone*, and a line is only retired if its own
+section still produces others. Losing a task you were relying on is far worse
+than showing it with stale wording.
+
+**Lines are presented, not just quoted.** The words are yours, verbatim; the
+punctuation debris of typing on a phone is not meaning. Doubled full stops
+become one ellipsis, a space before a comma closes up, and a line never ends on
+a dangling *"with"*. Anything over about forty-five characters gets a short
+heading with the exact quote underneath — and a heading has to be *meaningfully*
+shorter than the line, or it's the same sentence twice, once in bold. A comma is
+only a clause break when whitespace follows it, so *"…the sparing work with
+60,000 Omani rial"* can never be headed *"…with 60"*: same class of bug as a
+decimal point ending a sentence, and the same reason it matters — a number that
+quietly loses four digits reads as a fact.
+
+**A line has to say something.** *"29th September mostly 11:50 AM"* is a date, a
+filler word and a clock reading; it is true, it was in the transcript, and it is
+no use to anyone reading their morning brief. A task or key point now needs at
+least two words that are not digits, dates or filler. And the subtitle says how
+something reached your brain as a phrase rather than two labels bolted together
+with a dot: *Recorded yesterday*, *Noted on Tuesday*, *Photographed 4 Sep*.
+
 Anything you leave open shows up again the next day under **Still open from
 before**, with the date it came from — one row with one history, not a fresh copy
 every morning. It keeps coming back until you close it, which is the point.
@@ -422,7 +453,10 @@ blob round-trip, hybrid ranking behavior, answer phrasing, link-vs-note
 detection and link titling, summarizer behavior (including the property that
 matters most — every summary line is quoted verbatim from the transcript), what
 lands in a morning brief and what's correctly left out of it, the stored-summary
-round trip the brief depends on, which memories land in which brain box (and
+round trip the brief depends on, the reconciliation that rewords a brief line
+when its note is edited (and the guards that stop it deleting one), the
+presentation rules that keep a thousands separator out of a headline, which
+memories land in which brain box (and
 which subjects are too rare to earn one), the row-summary rule that stops a
 heading being repeated underneath itself, which links `ConnectionFinder` will and
 won't make (including the one that matters — a word you write constantly links
@@ -449,7 +483,8 @@ BrainBuddy/
                 PDFTextExtractor, AudioRecorder, SpeechTranscriber, SpeechSpeaker,
                 DiscussionSummarizer, Headline, AudioPlayerController,
                 CloudSyncMonitor
-  Services/     … BriefBuilder (what goes in a brief) + BriefService (persistence),
+  Services/     … BriefBuilder (what goes in a brief) + BriefService (persistence
+                and keeping lines in step with edited notes), BriefText (presentation),
                 NotificationScheduler, NotificationRouter
   Services/     … SharedInbox (App Group hand-off from the extension),
                 QuickCaptureQueue (Siri hand-off), SpotlightIndexer (iPhone Search),

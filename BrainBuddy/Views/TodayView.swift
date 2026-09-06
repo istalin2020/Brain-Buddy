@@ -240,8 +240,11 @@ struct TodayView: View {
             // Only the chevron navigates: the rest of the row belongs to the
             // close button, and a whole-row link would swallow those taps.
             if let source {
+                // A quote mark rather than a chevron: a link inside a list row
+                // already gets the system's own disclosure arrow, and two
+                // chevrons in a row read as a bug — which is how this looked.
                 NavigationLink(value: source) {
-                    Image(systemName: "chevron.right")
+                    Image(systemName: "text.quote")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -363,13 +366,17 @@ struct TodayView: View {
         isRefreshing = false
 
         // Says what happened. "Added nothing" and "the button is broken" look
-        // identical otherwise, which is exactly how this got reported.
+        // identical otherwise, which is exactly how this got reported. Updates
+        // are counted separately, because a line rewritten to match a note you
+        // corrected is the other thing this button does.
+        let updated = services.brief.updatedCount
         if let failure = services.brief.lastError {
             refreshNotice = failure
-        } else if added == 0 {
-            refreshNotice = "Nothing new to add."
         } else {
-            refreshNotice = added == 1 ? "Added 1 new line." : "Added \(added) new lines."
+            var parts: [String] = []
+            if added > 0 { parts.append(added == 1 ? "Added 1 line" : "Added \(added) lines") }
+            if updated > 0 { parts.append(updated == 1 ? "updated 1" : "updated \(updated)") }
+            refreshNotice = parts.isEmpty ? "Nothing new to add." : parts.joined(separator: ", ") + "."
         }
 
         rescheduleReminders()

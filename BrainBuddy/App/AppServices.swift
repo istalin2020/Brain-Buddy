@@ -175,6 +175,24 @@ final class AppServices {
         await applyMorningBriefPreference()
     }
 
+    /// Re-indexes an edited memory and brings the rest of the app into line with
+    /// it: search, the system index, the brief lines quoted from it, and the
+    /// reminders that name those lines.
+    ///
+    /// One call rather than four at every edit site, because the failure mode of
+    /// forgetting one is invisible — Today quietly quoting a figure you
+    /// corrected days ago.
+    func applyEdit(to item: MemoryItem, in context: ModelContext) async {
+        await ingest.finalize(item, in: context, activity: "Re-indexing")
+        // Reword the lines this note already produced, then pick up anything the
+        // edit newly created. Both directions matter: correcting a figure should
+        // update the row you have, and rewriting a note entirely should retire
+        // the old row and add the new one.
+        brief.resync(item, in: context)
+        brief.generate(in: context)
+        await refreshReminders(in: context)
+    }
+
     // MARK: - Requests from outside the app
 
     /// Collects anything Siri or Shortcuts left behind while the app wasn't
