@@ -51,11 +51,10 @@ struct CaptureView: View {
             .navigationDestination(for: MemoryItem.self) { item in
                 MemoryDetailView(item: item)
             }
+            // No Save in the toolbar. Saving belongs on the ↑ button inside the
+            // box, next to the mic — the two things you do to a draft, in the
+            // place you are already looking.
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") { saveDraft() }
-                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
                 ToolbarItem(placement: .topBarLeading) {
                     if isEditorFocused {
                         Button("Done") { isEditorFocused = false }
@@ -143,24 +142,25 @@ struct CaptureView: View {
                     .focused($isEditorFocused)
             }
             .padding(8)
-            // Room along the bottom edge for the dictation controls, so growing
-            // text never slides under them.
-            .padding(.bottom, 44)
+            // Room along the bottom edge for the two controls, so growing text
+            // never slides under them.
+            .padding(.bottom, 46)
             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            // One row rather than two corner overlays, so a long status line can
-            // never slide under the button.
+            // One row rather than corner overlays, so a long status line can
+            // never slide under the buttons.
             .overlay(alignment: .bottom) {
-                HStack(spacing: 8) {
+                HStack(spacing: 2) {
                     dictationStatus
                     Spacer(minLength: 0)
-                    dictationButton
+                    micButton
+                    commitButton
                 }
                 .padding(.leading, 12)
-                .padding(.trailing, 2)
+                .padding(.trailing, 4)
             }
             .animation(.easeInOut(duration: 0.2), value: isDictating)
 
-            Text("The mic types what you say straight into the note. “Voice note” below keeps the recording itself.")
+            Text("Mic types what you say. Tap ✓ to take the words, correct anything, then ↑ to save. “Voice note” below keeps the recording itself.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
 
@@ -176,23 +176,52 @@ struct CaptureView: View {
         }
     }
 
-    private var dictationButton: some View {
+    /// Left of the pair: starts dictating, and shows that it is.
+    ///
+    /// While listening it is a waveform, and tapping it finishes the same way the
+    /// tick does. Two ways to stop is deliberate — there is no gesture here that
+    /// can lose words you have already spoken.
+    private var micButton: some View {
         Button(action: toggleDictation) {
-            // An up arrow while listening, not a waveform: the button's job at
-            // that point is "I'm finished, take it", which is what an arrow says
-            // and a waveform doesn't.
-            Image(systemName: isDictating ? "arrow.up.circle.fill" : "mic.circle.fill")
-                // Sized to be hit without looking, mid-thought, one-handed —
-                // matching the mic on the Ask screen.
-                .font(.system(size: 38))
+            Image(systemName: isDictating ? "waveform.circle.fill" : "mic.circle.fill")
+                // Sized to be hit without looking, mid-thought, one-handed.
+                .font(.system(size: 34))
                 .symbolEffect(.pulse, isActive: isDictating)
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(isDictating ? Color.red : Color.accentColor)
                 .contentTransition(.symbolEffect(.replace))
         }
         .buttonStyle(.plain)
-        .padding(10)
+        .padding(6)
         .disabled(services.ingest.isBusy)
-        .accessibilityLabel(isDictating ? "Finish dictating" : "Dictate into this note")
+        .accessibilityLabel(isDictating ? "Stop listening" : "Dictate into this note")
+    }
+
+    /// Right of the pair, and it means one thing at a time.
+    ///
+    /// **✓ while listening**: take the words into the box. **↑ otherwise**: save
+    /// the note. Those are two separate decisions — accepting a transcript is not
+    /// the same as being finished with the thought — and running them together is
+    /// how a dictated note gets saved before you have had a chance to fix the one
+    /// word the recognizer got wrong.
+    private var commitButton: some View {
+        Button(action: commit) {
+            Image(systemName: isDictating ? "checkmark.circle.fill" : "arrow.up.circle.fill")
+                .font(.system(size: 34))
+                .foregroundStyle(canCommit ? Color.accentColor : Color.secondary.opacity(0.4))
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(.plain)
+        .padding(6)
+        .disabled(!canCommit)
+        .accessibilityLabel(isDictating ? "Accept what you said" : "Save this note")
+    }
+
+    /// Accepting is always available while listening — even before any words
+    /// arrive, because stopping has to work. Saving needs something to save.
+    private var canCommit: Bool {
+        if isDictating { return true }
+        guard !services.ingest.isBusy else { return false }
+        return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     @ViewBuilder
@@ -202,7 +231,7 @@ struct CaptureView: View {
                 Image(systemName: "dot.radiowaves.left.and.right")
                 Text(transcriber.liveTranscript.isEmpty
                      ? "Listening…"
-                     : "Pause as long as you like · tap ↑ when done")
+                     : "Pause as long as you like · tap ✓ when done")
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
@@ -289,6 +318,18 @@ struct CaptureView: View {
     // has no use for the created model, and the `capture` overloads return
     // `Void` so no SwiftData model ever becomes a `Task`'s result type. This
     // view is `@MainActor`, so the tasks inherit that isolation.
+
+    /// One button, one meaning at a time: take the words, or save the note.
+    private func commit() {
+        if isDictating {
+            // Ends audio capture and keeps everything recognized so far. The
+            // recognizer's final, better-punctuated pass lands a moment later
+            // through `onFinalTranscript` and replaces what is on screen.
+            transcriber.stopListening()
+            return
+        }
+        saveDraft()
+    }
 
     private func saveDraft() {
         // Saving mid-dictation must not drop the words already recognized but not
