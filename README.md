@@ -342,21 +342,42 @@ just point:
 | **Video & voice** | Temporal lobe | The auditory cortex, out to the side. |
 | **General** | Cerebellum | Everything that didn't need a room of its own. |
 
-The model is **built in code, not downloaded**: six low-poly lobes, a stem, three
-lights. A photoreal brain would be a twenty-megabyte asset, would take a second
-to appear, and would be *harder* to read — what matters here is telling six
-regions apart at a glance and hitting one with a thumb, which flat colour does
-better than anatomy. Regions swell slightly with how much is in them, so the
-shape of your own brain is visible before you read a number, and an empty region
-recedes rather than disappearing — you still need to see that the room exists.
+**The surface is generated, not downloaded.** There is no mesh file in this
+repository and there shouldn't be — a scanned brain is tens of megabytes, needs
+a licence, and has to be re-exported every time the look changes. `BrainMesh`
+builds it from a formula: an ellipsoid at roughly cerebral proportions, folded
+by three layers of sine waves into gyri, with the **longitudinal fissure** cut
+deliberately down the midline (that single groove is what separates a brain from
+a blob), a tapered forehead, a temporal bulge and a flattened underside. Then a
+cerebellum with tight parallel ridges, and a stem.
 
-Under the model the same six regions appear as chips. That is not a duplicate
-control: a lobe is a small target, some hide behind others until you turn the
-model, and VoiceOver cannot tap a mesh. The chips are the accessible,
-one-handed path to exactly the same thing.
+It is drawn twice over: a translucent additive volume so the shape reads as
+solid, and a **wireframe** over the top so it reads as *drawn*. Either alone
+looks like a mistake; together they look like a hologram. A pulsing core in the
+middle does real work — it separates the near surface from the far one when
+everything is lines — and the camera has bloom turned up so the bright parts
+glow.
 
-**Three steps to a document, each a bigger commitment than the last.** Open a
-region and you get names and dates. Tap a name and its key summary opens
+**Every document is wired to it.** One node per memory, on a filament running
+back to the part of the cortex it was filed under, arranged on a golden-angle
+spiral around its region's direction so clusters stay evenly dense and each
+document keeps its place between visits — which is the entire point of putting
+them in space. Zoomed out, that reads as a shape with a nervous system.
+
+**Zoom in and the near nodes say what they are.** Names appear on the nodes
+closest to the camera, by distance rather than by zoom level, so a crowded region
+reveals itself gradually and turning the brain reveals whatever came forward.
+Tap a node and its document opens in the list below — the region switches to
+follow it and the row scrolls to you, because a list that silently expanded
+something below the fold would look like nothing happened.
+
+Under the model the same six regions appear as chips, dimming everything that
+isn't the one you picked. That is not a duplicate control: a node is a small
+target, some sit behind the brain until you turn it, and VoiceOver cannot tap a
+mesh. The chips are the accessible, one-handed path to the same place.
+
+**Three steps to a document, each a bigger commitment than the last.** The model
+or the list gives you names and dates. Tap a name and its key summary opens
 underneath it. Tap the summary and the whole note opens on its own page. That is
 what stops a region holding thirty files from being thirty paragraphs.
 
@@ -543,7 +564,8 @@ BrainBuddy/
   Views/        RootView, TodayView, ReviewView, CaptureView (Input),
                 VoiceCaptureView, BrainView (the 3D brain) + TrashView,
                 MemoryDetailView, AskView, SettingsView,
-                Components/ (incl. BrainSceneView — the model, built in code)
+                Components/ (incl. BrainMesh — the surface as a formula —
+                and BrainSceneView — the hologram, the wiring and the labels)
   Resources/    Assets.xcassets, PrivacyInfo.xcprivacy
 BrainBuddyShare/  ShareViewController — the share extension
 BrainBuddyTests/

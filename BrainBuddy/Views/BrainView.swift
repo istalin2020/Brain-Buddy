@@ -27,6 +27,11 @@ struct BrainView: View {
     @State private var scope: PeriodScope = .all
     @State private var period: BrainPeriod?
     @State private var map = BrainMap()
+    /// Every document currently on screen, as nodes wired to the brain — newest
+    /// first, so when there are more than the scene holds it keeps the ones you
+    /// are most likely to be after. Stored rather than computed: this feeds a
+    /// `UIViewRepresentable`, which reads it on every redraw.
+    @State private var sceneFiles: [BrainSceneFile] = []
     @State private var selection: BrainRegion?
     @State private var section: WorkSection?
     @State private var openFile: UUID?
@@ -59,6 +64,15 @@ struct BrainView: View {
                 }
             }
             .task(id: signature) { await rebuild() }
+            // A node tapped on the model belongs to a region that may not be the
+            // one on screen. Open it, rather than selecting something invisible.
+            .onChange(of: openFile) { _, newValue in
+                guard let newValue, let file = file(withID: newValue) else { return }
+                if selection != file.region {
+                    selection = file.region
+                    section = nil
+                }
+            }
             // Set when a Spotlight result is tapped. Collected on appearance
             // too, because the request usually arrives before this tab exists.
             .task { openPendingMemory() }
@@ -130,8 +144,13 @@ struct BrainView: View {
     // MARK: - The model
 
     private var stage: some View {
-        BrainSceneView(counts: map.counts, selection: $selection, resetToken: resetToken)
-            .frame(height: 300)
+        BrainSceneView(
+            files: sceneFiles,
+            highlight: selection,
+            selectedFile: $openFile,
+            resetToken: resetToken
+        )
+            .frame(height: 320)
             .overlay(alignment: .topTrailing) {
                 Button {
                     resetToken += 1
@@ -146,14 +165,16 @@ struct BrainView: View {
                 .accessibilityLabel("Straighten the view")
             }
             .overlay(alignment: .bottom) {
-                if selection == nil {
-                    Text("Drag to turn · pinch to zoom · tap a region")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .allowsHitTesting(false)
-                }
+                Text(openFile == nil
+                     ? "Drag to turn · pinch in to read the nodes · tap one"
+                     : "Tap the summary below to open the document")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .allowsHitTesting(false)
             }
     }
+
+
 
     /// The same six regions as a row of chips.
     ///
@@ -211,10 +232,23 @@ struct BrainView: View {
 
     @ViewBuilder
     private var panel: some View {
-        if let selection {
-            regionPanel(selection)
-        } else {
-            overviewPanel
+        ScrollViewReader { proxy in
+            Group {
+                if let selection {
+                    regionPanel(selection)
+                } else {
+                    overviewPanel
+                }
+            }
+            // Opening a node on the model has to bring its row to you; a list
+            // that silently expanded a row somewhere below the fold would look
+            // like nothing happened.
+            .onChange(of: openFile) { _, newValue in
+                guard let newValue else { return }
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    proxy.scrollTo(newValue, anchor: .center)
+                }
+            }
         }
     }
 
@@ -231,7 +265,7 @@ struct BrainView: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(files) { file in
-                    fileRow(file)
+                    fileRow(file).id(file.id)
                 }
             } header: {
                 VStack(alignment: .leading, spacing: 8) {
@@ -321,7 +355,7 @@ struct BrainView: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(Array(recent)) { file in
-                    fileRow(file, showsRegion: true)
+                    fileRow(file, showsRegion: true).id(file.id)
                 }
             } header: {
                 Text("\(map.total) \(map.total == 1 ? "memory" : "memories") · newest first")
@@ -437,6 +471,10 @@ struct BrainView: View {
         return "\(memories.count)-\(Int(newest))-\(scope.rawValue)-\(period?.id ?? "none")"
     }
 
+    private func file(withID id: UUID) -> BrainFile? {
+        map.files.values.flatMap { $0 }.first { $0.id == id }
+    }
+
     private func item(for file: BrainFile) -> MemoryItem? {
         memories.first { $0.identifier == file.id }
     }
@@ -465,6 +503,11 @@ struct BrainView: View {
         }.value
 
         map = built
+        sceneFiles = built.files
+            .values
+            .flatMap { $0 }
+            .sorted { $0.createdAt > $1.createdAt }
+            .map { BrainSceneFile(id: $0.id, title: $0.title, region: $0.region) }
 
         // A filter change can take the open document off the screen; leaving its
         // id set would silently re-open it the next time it came back.
