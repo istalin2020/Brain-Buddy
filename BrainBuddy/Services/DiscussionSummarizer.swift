@@ -59,10 +59,11 @@ enum DiscussionSummarizer {
 
     /// Returns `nil` when there is not enough material to summarize honestly.
     static func summarize(
-        _ transcript: String,
+        _ raw: String,
         maxKeyPoints: Int = 5,
         maxFollowUps: Int = 4
     ) -> Summary? {
+        let transcript = prepared(raw)
         let sentences = usableSentences(in: transcript)
         guard sentences.count >= 2 else { return nil }
         guard wordCount(of: transcript) >= minimumWords else { return nil }
@@ -107,6 +108,57 @@ enum DiscussionSummarizer {
             followUps: followUpIndexes.map { clipped(sentences[$0]) }
         )
         return summary.isEmpty ? nil : summary
+    }
+
+    /// Straightens out text that was written as a document rather than spoken.
+    ///
+    /// This was built for transcripts, where the input is a wall of sentences.
+    /// A scanned email or an agenda is a different shape — it arrives already
+    /// bulleted and labelled — and feeding that in raw produced summaries like
+    /// `• • Date & Time:` and lines that were nothing but `Jury Panel:`. Two
+    /// rules fix both:
+    ///
+    /// - **Strip the list markers.** They are the source's formatting; the
+    ///   summary adds its own, and two bullets is a bug you can see from across
+    ///   the room.
+    /// - **A label belongs with its value.** A line ending in a colon is a
+    ///   heading for the line under it, and on its own it says nothing —
+    ///   "Date & Time:" is not a key point, "Date & Time: Wednesday 9 September,
+    ///   11:30" is.
+    static func prepared(_ raw: String) -> String {
+        var lines: [String] = []
+
+        for rawLine in raw.components(separatedBy: .newlines) {
+            var line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+
+            // Written out rather than escaped: a raw string leaves `\u{2022}`
+            // as six characters, and ICU reads `\u` as a four-hex-digit escape,
+            // so the escaped form silently matches nothing.
+            line = line.replacingOccurrences(
+                of: #"^[•·▪◦‣*+\-–—]+\s*"#,
+                with: "",
+                options: .regularExpression
+            )
+            line = line.replacingOccurrences(
+                of: #"^\d{1,2}[.)]\s+"#,
+                with: "",
+                options: .regularExpression
+            )
+
+            line = line.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+
+            if let previous = lines.last, previous.hasSuffix(":") {
+                lines[lines.count - 1] = previous + " " + line
+            } else {
+                lines.append(line)
+            }
+        }
+
+        // A trailing label with nothing under it is still just a label.
+        if let last = lines.last, last.hasSuffix(":") { lines.removeLast() }
+        return lines.joined(separator: "\n")
     }
 
     /// Longest a single summary line may be.
@@ -210,13 +262,34 @@ enum DiscussionSummarizer {
         for index in ranked where chosen.count < limit {
             let terms = Set(Tokenizer.tokens(in: sentences[index]))
             guard !terms.isEmpty else { continue }
-            // People repeat themselves when they talk; two restatements of one
-            // point should not spend two of the five slots.
-            guard !chosenTerms.contains(where: { overlap(terms, $0) > 0.7 }) else { continue }
+            // People repeat themselves when they talk, and documents repeat
+            // themselves by design — an agenda states the same meeting three
+            // ways. Two restatements of one point must not spend two slots.
+            guard !chosenTerms.contains(where: { restates(terms, $0) }) else { continue }
             chosen.append(index)
             chosenTerms.append(terms)
         }
         return chosen.sorted()
+    }
+
+    /// Whether one line says what another already said.
+    ///
+    /// Plain overlap misses the common case: *"Your jury round is scheduled"*
+    /// and *"Your AI Hackathon Jury Round — Wed, 9 Sep, 11:30"* share only two
+    /// words out of ten, so they scored as different points and both appeared.
+    /// Containment catches it — the shorter line is almost entirely inside the
+    /// longer one — while the two-word floor stops a pair of three-word lines
+    /// merging on a single coincidence.
+    static func restates(_ lhs: Set<String>, _ rhs: Set<String>) -> Bool {
+        if overlap(lhs, rhs) > 0.7 { return true }
+        let shared = lhs.intersection(rhs).count
+        return shared >= 2 && containment(lhs, rhs) >= 0.62
+    }
+
+    private static func containment(_ lhs: Set<String>, _ rhs: Set<String>) -> Double {
+        let smaller = min(lhs.count, rhs.count)
+        guard smaller > 0 else { return 0 }
+        return Double(lhs.intersection(rhs).count) / Double(smaller)
     }
 
     private static func overlap(_ lhs: Set<String>, _ rhs: Set<String>) -> Double {
@@ -324,6 +397,11 @@ enum DiscussionSummarizer {
             let key = word.lowercased()
             guard key.count > 2 else { return }
             guard !Tokenizer.stopwords.contains(key), !Tokenizer.questionFillers.contains(key) else { return }
+            // "Topics: Jury, Sep, idea, minutes" — half of that is a date and a
+            // filler word. A subject is what the thing was *about*.
+            guard !BriefText.timeWords.contains(key), !BriefText.fillerWords.contains(key) else { return }
+            guard !BriefBuilder.dayWords.contains(key) else { return }
+            guard key.rangeOfCharacter(from: .decimalDigits) == nil else { return }
             weights[key, default: 0] += weight
             // Prefer a capitalized spelling when one exists: "PCH", not "pch".
             if let existing = display[key] {
@@ -361,7 +439,9 @@ enum DiscussionSummarizer {
 
     // MARK: - Helpers
 
-    private static func wordCount(of text: String) -> Int {
+    /// Shared with the capture path, which uses it to decide whether a scan
+    /// has enough words in it to be worth summarizing at all.
+    static func wordCount(of text: String) -> Int {
         text.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count
     }
 }

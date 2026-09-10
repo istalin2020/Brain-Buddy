@@ -22,9 +22,22 @@ enum TextAnalysis {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
 
-        // A short opening line, with more text under it, is a title someone wrote.
-        if let firstLine = lines.first, firstLine.count <= 70, lines.count > 1 || trimmed.count <= 70 {
+        // A short opening line, with a little text under it, is a title someone
+        // wrote. Three lines is the cut: past that this is a document, not a
+        // note with a heading.
+        if lines.count <= 3,
+           let firstLine = lines.first,
+           firstLine.count <= 70,
+           lines.count > 1 || trimmed.count <= 70 {
             return firstLine
+        }
+
+        // A document's first line is usually furniture — a bank name, a
+        // "Transaction Number:" label, a row of digits. Take the first line
+        // that reads like a statement instead, which is what a person scanning
+        // the list is looking for.
+        if lines.count > 3, let line = lines.first(where: isTitleWorthy) {
+            return line
         }
 
         let headline = Headline.from(trimmed, fallback: "")
@@ -38,6 +51,24 @@ enum TextAnalysis {
             return String(cut[cut.startIndex..<lastSpace]) + "…"
         }
         return String(cut) + "…"
+    }
+
+    /// Whether a line from a document can stand as its name.
+    ///
+    /// Rejects the three shapes that made "Transaction Number:" and "From:
+    /// 0435XX" into titles: a label ending in a colon, a line with barely any
+    /// words in it, and a line that is mostly digits.
+    static func isTitleWorthy(_ line: String) -> Bool {
+        guard line.count <= 70 else { return false }
+        guard !line.hasSuffix(":") else { return false }
+
+        let words = line.split(separator: " ")
+        guard words.count >= 3 else { return false }
+
+        let letters = line.filter(\.isLetter).count
+        let digits = line.filter(\.isNumber).count
+        guard letters >= 8, letters > digits else { return false }
+        return true
     }
 
     /// Keywords used for the `keywordIndex` field: nouns and proper nouns win,

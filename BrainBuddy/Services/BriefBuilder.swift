@@ -125,7 +125,48 @@ enum BriefBuilder {
             claimed: &claimed
         )
 
-        return schedule + tasks + points
+        return oneLinePerSource(schedule + tasks + points)
+    }
+
+    /// At most one line per memory, whichever section it lands in.
+    ///
+    /// One scanned meeting invitation produced five rows — *"How the session
+    /// will run"*, *"Your jury round is scheduled"*, *"Bring you into the call
+    /// one by one"*, and two more — which is one thing to do, reported five
+    /// times, pushing everything else off the screen. A brief is a list of
+    /// things, not a list of sentences.
+    ///
+    /// Which line survives is decided by section, in the order a morning
+    /// actually needs them: something happening today beats something to do,
+    /// which beats something to bear in mind. Within a section the first is
+    /// kept, and the sections already emit their best line first.
+    static func oneLinePerSource(_ candidates: [BriefCandidate]) -> [BriefCandidate] {
+        var best: [UUID: BriefCandidate] = [:]
+        var order: [UUID] = []
+        var unattributed: [BriefCandidate] = []
+
+        for candidate in candidates {
+            guard let source = candidate.sourceIdentifier else {
+                unattributed.append(candidate)
+                continue
+            }
+            guard let existing = best[source] else {
+                best[source] = candidate
+                order.append(source)
+                continue
+            }
+            if rank(candidate.kind) < rank(existing.kind) { best[source] = candidate }
+        }
+
+        return order.compactMap { best[$0] } + unattributed
+    }
+
+    private static func rank(_ kind: BriefEntryKind) -> Int {
+        switch kind {
+        case .schedule: return 0
+        case .task: return 1
+        case .point: return 2
+        }
     }
 
     // MARK: - Schedule

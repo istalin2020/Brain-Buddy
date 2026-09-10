@@ -38,6 +38,27 @@ listening *and* filed the note would save it before you had a chance to fix it.
 Tapping the waveform finishes the same way the tick does, so no gesture on this
 screen can lose words you have already spoken.
 
+**The same thing saved twice is saved once.** Every door into this app favours
+never losing a capture over never repeating one — the share extension and the
+Siri queue both delete their file only *after* the memory exists, so an
+interrupted import re-runs and arrives twice. The cost was a library holding
+four copies of one screenshot, and, worse, the same document filed under two
+different regions. `CaptureFingerprint` now identifies a capture by its
+**normalized words**, not its bytes: two screenshots of one message differ by the
+clock in the status bar and agree on every word, and a PDF re-exported has new
+bytes and the same text. Words first, bytes only when there are none (a photo of
+a sunset), and nothing at all when there are fewer than five words — a scrap of
+OCR is not enough to declare two things the same. A duplicate says so on screen
+and names what it matched, rather than silently doing nothing.
+
+**Documents are read when they arrive.** A scan, a PDF, a screenshot or a
+recording lands as a wall of text with no shape to it, and leaving that until
+somebody presses *Create summary* made the library a list of first lines. Now the
+summary is written at capture and marked as the app's own work — searchable and
+readable immediately, but **kept out of your morning brief** until you press
+*Use this in my brief*. That is the same rule OCR text already lived under:
+nobody agreed to it, so it cannot hand you a task to tick off.
+
 There are no item limits, no character caps, and no subscription gates. Large
 payloads use SwiftData's `.externalStorage`, so they live outside the SQLite
 file and mirror to CloudKit as `CKAsset`s.
@@ -146,6 +167,16 @@ only a clause break when whitespace follows it, so *"…the sparing work with
 decimal point ending a sentence, and the same reason it matters — a number that
 quietly loses four digits reads as a fact.
 
+**One memory, one line.** A scanned meeting invitation used to produce five
+rows — the jury round, the schedule, how the session runs, and two restatements
+of the same thing — which is one thing to know, reported five times, pushing
+everything else off the screen. A brief is a list of things, not a list of
+sentences. Which line survives is decided by what a morning needs first:
+something happening today beats something to do, which beats something to bear
+in mind. Briefs built before this rule collapse themselves the next time you open
+the app, and a line you already closed is never collapsed away — ticking
+something off is a decision, and the record of it is not a duplicate.
+
 **A line has to say something.** *"29th September mostly 11:50 AM"* is a date, a
 filler word and a clock reading; it is true, it was in the transcript, and it is
 no use to anyone reading their morning brief. A task or key point now needs at
@@ -233,6 +264,23 @@ Voice capture is built for the long case, not just the ten-second reminder:
 
 Any long memory can be summarized later, too: open it and the Summary section is
 there, including for OCR'd scans and imported PDFs.
+
+**Documents are not transcripts, and are prepared differently.** The summarizer
+was built for speech — a wall of sentences. A scanned email or an agenda arrives
+already bulleted and labelled, and feeding that in raw produced summaries reading
+`• • Date & Time:` with lines that were nothing but `Jury Panel:`. Two rules fix
+both: list markers are stripped (they're the source's formatting; the summary
+adds its own), and **a label is joined to its value** — "Date & Time:" is not a
+key point, "Date & Time: Wednesday 9 September, 11:30" is. A trailing label with
+nothing under it is dropped.
+
+**And it says each thing once.** Plain overlap missed the common case: *"Your
+jury round is scheduled"* and *"Your AI Hackathon Jury Round — Wed, 9 Sep,
+11:30"* share two words out of ten, scored as different points, and both
+appeared. Containment catches it — the shorter line is almost entirely inside the
+longer one — with a two-word floor so a pair of short lines can't merge on one
+coincidence. Subjects are filtered too: *"Topics: Jury, Sep, idea, minutes"* was
+half date and filler, and a date is not what something was about.
 
 ### Siri, Shortcuts and iPhone Search
 
@@ -381,6 +429,13 @@ or the list gives you names and dates. Tap a name and its key summary opens
 underneath it. Tap the summary and the whole note opens on its own page. That is
 what stops a region holding thirty files from being thirty paragraphs.
 
+**One category per memory, and a long document has to earn it.** In six words,
+one match is the subject; in six hundred, one match is a coincidence — and it
+was: two scans of the same bank message landed in two different regions because
+one of them contained a family word exactly once. Past sixty distinct words a
+document has to say it twice, which is what keeps near-identical things filed
+together.
+
 **Filing is explainable, and you can overrule it.** `BrainClassifier` runs three
 passes: a `#tag` you typed settles it outright; then what the thing *is* (a photo
 goes to the visual cortex whatever it is about, or the map stops feeling
@@ -522,7 +577,10 @@ blob round-trip, hybrid ranking behavior, answer phrasing, link-vs-note
 detection and link titling, summarizer behavior (including the property that
 matters most — every summary line is quoted verbatim from the transcript), what
 lands in a morning brief and what's correctly left out of it, the stored-summary
-round trip the brief depends on, the reconciliation that rewords a brief line
+round trip the brief depends on, recognising a capture that has arrived before,
+the one-line-per-memory rule and the clean-up that applies it to briefs built
+without it, what a summarizer does with a bulleted document and how it avoids
+saying the same thing twice, the reconciliation that rewords a brief line
 when its note is edited (and the guards that stop it deleting one), the
 presentation rules that keep a thousands separator out of a headline, which
 region of the cortex a memory is filed in (and the stemming fixpoint that makes
@@ -560,7 +618,8 @@ BrainBuddy/
   Services/     … SharedInbox (App Group hand-off from the extension),
                 QuickCaptureQueue (Siri hand-off), SpotlightIndexer (iPhone Search),
                 ConnectionFinder (automatic links), ReviewBuilder (the review),
-                BrainClassifier (which region a memory lands in), PeriodFilter
+                BrainClassifier (which region a memory lands in), PeriodFilter,
+                CaptureFingerprint (the same thing, saved twice)
   Views/        RootView, TodayView, ReviewView, CaptureView (Input),
                 VoiceCaptureView, BrainView (the 3D brain) + TrashView,
                 MemoryDetailView, AskView, SettingsView,

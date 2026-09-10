@@ -18,8 +18,17 @@ final class IngestService {
 
     private(set) var lastError: String?
 
+    /// Something worth saying that isn't a failure — "that was already in your
+    /// brain". Kept apart from `lastError` so a duplicate doesn't raise an alert
+    /// that reads like something went wrong.
+    private(set) var lastNotice: String?
+
     func clearError() {
         lastError = nil
+    }
+
+    func clearNotice() {
+        lastNotice = nil
     }
 
     // MARK: - Text
@@ -33,6 +42,11 @@ final class IngestService {
         // readable title instead of showing the raw address as its own name.
         if let url = TextAnalysis.bareURL(in: trimmed) {
             return await saveLink(url, in: context)
+        }
+
+        if let existing = duplicate(of: CaptureFingerprint.text(trimmed), in: context) {
+            noteDuplicate(existing)
+            return existing
         }
 
         let item = MemoryItem(text: trimmed, kind: .note)
@@ -118,6 +132,18 @@ final class IngestService {
         }
 
         let recognized = await TextRecognizer.recognizeText(in: image)
+
+        // The same screenshot shared twice differs by the clock in its status
+        // bar, so the words decide first and the bytes only when there are none.
+        if let existing = duplicate(
+            of: CaptureFingerprint.of(text: recognized, payload: payload),
+            in: context
+        ) {
+            activity = nil
+            noteDuplicate(existing)
+            return existing
+        }
+
         let item = MemoryItem(kind: .image, source: source)
         item.extractedText = recognized
 
@@ -166,6 +192,17 @@ final class IngestService {
         }
 
         item.extractedText = pageTexts.joined(separator: "\n\n")
+
+        // Checked after the pages are read rather than before, because until
+        // they are read there is nothing to compare. The half-built memory is
+        // removed rather than kept: its attachments cascade with it.
+        if let existing = duplicate(of: CaptureFingerprint.text(item.extractedText), in: context) {
+            context.delete(item)
+            save(context)
+            noteDuplicate(existing)
+            return existing
+        }
+
         await finalize(item, in: context, activity: "Indexing", fallbackTitle: "Scan")
         return item
     }
@@ -203,6 +240,11 @@ final class IngestService {
             let text = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .isoLatin1)
                 ?? ""
+            if let existing = duplicate(of: CaptureFingerprint.of(text: text, payload: data), in: context) {
+                activity = nil
+                noteDuplicate(existing)
+                return existing
+            }
             let item = MemoryItem(text: text, kind: .document, source: url.lastPathComponent)
             context.insert(item)
             await finalize(item, in: context, activity: "Indexing", fallbackTitle: url.lastPathComponent)
@@ -223,6 +265,15 @@ final class IngestService {
     func savePDF(data: Data, filename: String, in context: ModelContext) async -> MemoryItem? {
         activity = "Reading \(filename)"
         let extracted = await PDFTextExtractor.extract(from: data)
+
+        if let existing = duplicate(
+            of: CaptureFingerprint.of(text: extracted.text, payload: data),
+            in: context
+        ) {
+            activity = nil
+            noteDuplicate(existing)
+            return existing
+        }
 
         let item = MemoryItem(kind: .document, source: filename)
         item.extractedText = extracted.text
@@ -372,10 +423,16 @@ final class IngestService {
         }
 
         item.keywordIndex = TextAnalysis.keywords(from: body).joined(separator: " ")
+        item.contentFingerprint = CaptureFingerprint.of(
+            text: body,
+            payload: item.sortedAttachments.first?.payload
+        ) ?? ""
 
         for name in TextAnalysis.hashtags(in: item.text) {
             attach(tagNamed: name, to: item, in: context)
         }
+
+        await summarizeIfNeeded(item, body: body)
 
         // Embedding generation is CPU-bound; keep it off the main actor so the
         // capture sheet stays responsive on long documents.
@@ -392,6 +449,58 @@ final class IngestService {
         // capture and every edit passes through, so an edited note can never
         // leave a stale entry in Spotlight.
         publishToSpotlight(item)
+    }
+
+    // MARK: - Reading what arrived
+
+    /// Writes a summary for anything that arrived as a document rather than as a
+    /// sentence you typed.
+    ///
+    /// A scan, a PDF, a screenshot or a recording lands as a wall of text with
+    /// no shape to it. Leaving that until somebody presses *Create summary*
+    /// means the library reads as a list of first lines — which is exactly what
+    /// it did. So the summary is written at capture, marked as the app's own
+    /// work, and can be adopted with one tap.
+    ///
+    /// It never overwrites a summary you saved, and never touches a typed note:
+    /// you already wrote that in your own words.
+    private func summarizeIfNeeded(_ item: MemoryItem, body: String) async {
+        guard item.summary.isEmpty || item.summaryIsAutomatic else { return }
+        guard item.kind != .note, item.kind != .link else { return }
+        guard DiscussionSummarizer.wordCount(of: body) >= DiscussionSummarizer.minimumWords else {
+            return
+        }
+
+        activity = "Reading it"
+        // Two `NLTagger` passes over a long document; keep them off the main
+        // actor so a big PDF doesn't freeze the capture screen.
+        let summary = await Task.detached(priority: .userInitiated) {
+            DiscussionSummarizer.summarize(body)
+        }.value
+
+        guard let summary, !summary.isEmpty else { return }
+        item.summary = summary.text
+        item.summaryIsAutomatic = true
+    }
+
+    /// An existing memory with the same content, if there is one.
+    private func duplicate(of fingerprint: String?, in context: ModelContext) -> MemoryItem? {
+        guard let fingerprint, !fingerprint.isEmpty else { return nil }
+        var descriptor = FetchDescriptor<MemoryItem>(
+            predicate: #Predicate { $0.contentFingerprint == fingerprint && !$0.isTrashed }
+        )
+        descriptor.fetchLimit = 1
+        return (try? context.fetch(descriptor))?.first
+    }
+
+    /// Says what happened, and brings the original forward rather than leaving
+    /// you wondering where your capture went.
+    private func noteDuplicate(_ existing: MemoryItem) {
+        activity = nil
+        let name = existing.displayTitle
+        lastNotice = name.isEmpty
+            ? "That was already in your brain."
+            : "Already in your brain — “\(name)”."
     }
 
     // MARK: - System search
@@ -453,6 +562,9 @@ final class IngestService {
     /// things that mattered in it.
     func setSummary(_ summary: String, on item: MemoryItem, in context: ModelContext) async {
         item.summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Reviewed by a person, so it stops being the app's guess and starts
+        // being something you said — which is what lets it reach your brief.
+        item.summaryIsAutomatic = false
         await finalize(item, in: context, activity: "Saving summary")
     }
 

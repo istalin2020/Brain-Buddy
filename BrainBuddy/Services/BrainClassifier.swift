@@ -56,16 +56,30 @@ enum BrainClassifier {
         let words = terms(in: searchableText(of: input))
         guard !words.isEmpty else { return .general }
 
+        // How much evidence a long document has to show.
+        //
+        // In six words, one match is the subject. In six hundred, one match is a
+        // coincidence — and it was: two scans of the same bank message landed in
+        // two different regions because one of them happened to contain a word
+        // from the family lexicon exactly once. Near-identical documents filed
+        // differently is the thing that makes the whole map untrustworthy, so a
+        // long text has to say it twice.
+        let required = words.count > longTextTokens ? 2 : 1
+
         // Ordered, so an equal number of hits resolves the same way every time
         // rather than by dictionary order.
         var best: (region: BrainRegion, hits: Int)?
         for region in lexicalRegions {
             let hits = words.intersection(lexicon(for: region)).count
-            guard hits > 0 else { continue }
+            guard hits >= required else { continue }
             if best == nil || hits > (best?.hits ?? 0) { best = (region, hits) }
         }
         return best?.region ?? .general
     }
+
+    /// Distinct words past which a memory counts as a document rather than a
+    /// note, and needs more than one match to claim a region.
+    static let longTextTokens = 60
 
     /// Regions that can be reached by what a memory *says*, in tie-break order.
     static let lexicalRegions: [BrainRegion] = [.work, .family, .friends]

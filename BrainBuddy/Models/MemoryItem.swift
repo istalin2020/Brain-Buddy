@@ -77,6 +77,22 @@ final class MemoryItem {
     /// that carry a default value, so existing records simply read back "".
     var summary: String = ""
 
+    /// True when nobody has reviewed `summary` — the app wrote it at capture so
+    /// a scan or a recording has something readable under its name.
+    ///
+    /// The distinction matters beyond labelling: a summary you pressed Save on
+    /// is treated as something you *said*, and can put lines in your morning
+    /// brief. One the app wrote from a document cannot, for the same reason OCR
+    /// text can't — see `BriefService`.
+    ///
+    /// Added after the first release; CloudKit mirroring accepts new attributes
+    /// that carry a default, so existing records read back `false`.
+    var summaryIsAutomatic: Bool = false
+
+    /// Hash of this capture's own content, used to recognise the same thing
+    /// arriving twice. Empty for anything captured before this existed.
+    var contentFingerprint: String = ""
+
     var kindRaw: String = MemoryKind.note.rawValue
 
     var createdAt: Date = Date()

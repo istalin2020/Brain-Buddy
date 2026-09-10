@@ -166,6 +166,63 @@ final class BriefBuilderTests: XCTestCase {
         XCTAssertFalse(BriefBuilder.namesADay("10:30:00"))
     }
 
+    // MARK: - One line per source
+
+    /// A scanned meeting invitation produced five rows — the jury round, the
+    /// schedule, how the session runs, and two restatements of the same thing.
+    /// That is one thing to know, reported five times, pushing everything else
+    /// off the screen.
+    func testOneMemoryProducesOneLine() {
+        let invitation = """
+        Your AI Hackathon jury round is on Wednesday.
+        We will bring you into the call one by one within the session.
+        Please join on time and stay available.
+        You have to present your idea to the jury panel.
+        The jury round is scheduled for the slot above.
+        """
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [BriefSource(
+                identifier: UUID(),
+                title: "AI Hackathon jury round",
+                text: invitation,
+                summary: "",
+                createdAt: today,
+                kind: .document
+            )],
+            calendar: calendar
+        )
+        XCTAssertEqual(candidates.count, 1, "got \(candidates.map(\.text))")
+    }
+
+    /// Two different notes still get a row each — the cap is per memory, not
+    /// per brief.
+    func testTwoMemoriesStillProduceTwoLines() {
+        let candidates = BriefBuilder.build(
+            for: today,
+            from: [
+                source(text: "Prepare the PPT for the hackathon"),
+                source(text: "Send the tender drawings to the contractor")
+            ],
+            calendar: calendar
+        )
+        XCTAssertEqual(candidates.count, 2)
+    }
+
+    /// When a memory could produce two kinds of line, the one a morning needs
+    /// first survives.
+    func testSomethingHappeningTodayOutranksSomethingToDo() throws {
+        let scheduled = BriefBuilder.oneLinePerSource([
+            BriefCandidate(kind: .point, text: "A point", headline: "", detail: "", scheduledAt: nil, sourceIdentifier: sharedSource),
+            BriefCandidate(kind: .schedule, text: "A meeting", headline: "", detail: "", scheduledAt: today, sourceIdentifier: sharedSource),
+            BriefCandidate(kind: .task, text: "A task", headline: "", detail: "", scheduledAt: nil, sourceIdentifier: sharedSource)
+        ])
+        XCTAssertEqual(scheduled.count, 1)
+        XCTAssertEqual(try XCTUnwrap(scheduled.first).kind, .schedule)
+    }
+
+    private var sharedSource: UUID { UUID(uuidString: "00000000-0000-0000-0000-0000000000aa") ?? UUID() }
+
     // MARK: - Where a line came from
 
     /// A one-sentence note is titled after its own first line, so using the title

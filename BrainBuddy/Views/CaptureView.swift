@@ -43,6 +43,7 @@ struct CaptureView: View {
                     editor
                     captureButtons
                     if services.ingest.isBusy { progressBanner }
+                    if let notice = services.ingest.lastNotice { noticeBanner(notice) }
                     recentSection
                 }
                 .padding()
@@ -276,6 +277,33 @@ struct CaptureView: View {
         .disabled(services.ingest.isBusy)
     }
 
+    /// A duplicate isn't a failure, so it doesn't get an alert. It gets a line
+    /// that says what happened and goes away when you dismiss it — because the
+    /// alternative, silently saving a fourth copy of the same screenshot, is
+    /// what filled the library up.
+    private func noticeBanner(_ notice: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle")
+                .foregroundStyle(Color.accentColor)
+            Text(notice)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button {
+                services.ingest.clearNotice()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
     private var progressBanner: some View {
         HStack(spacing: 10) {
             ProgressView()
@@ -341,6 +369,9 @@ struct CaptureView: View {
         let text = draft
         draft = ""
         isEditorFocused = false
+        // Clear last time's notice so the one this capture produces — or the
+        // absence of one — is unambiguous.
+        services.ingest.clearNotice()
         Task { await services.ingest.capture(text: text, in: modelContext) }
     }
 

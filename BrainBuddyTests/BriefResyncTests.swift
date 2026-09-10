@@ -184,6 +184,74 @@ final class BriefResyncTests: XCTestCase {
         XCTAssertEqual(brief.reconcileAll(in: context), 0)
     }
 
+    /// One scanned invitation used to produce five rows. `BriefBuilder` stops
+    /// that happening again; this is the clean-up for briefs built before it.
+    func testDuplicateRowsFromOneMemoryCollapseOnOpen() throws {
+        let item = insert("Your AI Hackathon jury round is on the tenth. You have to present your idea.")
+        let day = Calendar.current.startOfDay(for: Date())
+
+        for (index, text) in ["How the session will run", "Your jury round is scheduled"].enumerated() {
+            context.insert(
+                BriefEntry(
+                    day: day,
+                    kind: .point,
+                    text: text,
+                    sourceIdentifier: item.identifier,
+                    sortIndex: index
+                )
+            )
+        }
+        try context.save()
+        XCTAssertEqual(entries().count, 2)
+
+        brief.reconcileAll(in: context)
+
+        let after = entries()
+        XCTAssertEqual(after.count, 1, "One memory, one open line")
+        XCTAssertEqual(after.first?.text, "How the session will run", "The first one is kept")
+    }
+
+    /// Ticking something off is a decision, and the record of it is not a
+    /// duplicate.
+    func testAClosedLineIsNeverCollapsedAway() throws {
+        let item = insert("Your AI Hackathon jury round is on the tenth. You have to present your idea.")
+        let day = Calendar.current.startOfDay(for: Date())
+
+        let closed = BriefEntry(day: day, kind: .point, text: "Already dealt with", sourceIdentifier: item.identifier, sortIndex: 0)
+        closed.isClosed = true
+        closed.closedAt = Date()
+        context.insert(closed)
+        context.insert(
+            BriefEntry(day: day, kind: .point, text: "Still open", sourceIdentifier: item.identifier, sortIndex: 1)
+        )
+        try context.save()
+
+        brief.reconcileAll(in: context)
+        XCTAssertEqual(entries().count, 2)
+    }
+
+    /// A summary the app wrote from a scan is on the same footing as the OCR it
+    /// came from: readable, and not something you committed to.
+    func testAnAutomaticSummaryStaysOutOfTheBrief() throws {
+        let item = MemoryItem(kind: .document, source: "Scan")
+        item.extractedText = "Minutes of the site meeting, printed and scanned."
+        item.summary = DiscussionSummarizer.Summary(
+            topics: [],
+            keyPoints: [],
+            followUps: ["You have to submit the shutdown plan"]
+        ).text
+        item.summaryIsAutomatic = true
+        context.insert(item)
+        try context.save()
+
+        XCTAssertEqual(brief.generate(in: context), 0, "Nobody agreed to this yet")
+
+        // Pressing "Use this in my brief" is what changes that.
+        item.summaryIsAutomatic = false
+        item.touch()
+        XCTAssertGreaterThan(brief.generate(in: context), 0)
+    }
+
     func testAnUntouchedNoteIsLeftCompletelyAlone() throws {
         _ = insert("Prepare the PPT for the hackathon")
         brief.generate(in: context)

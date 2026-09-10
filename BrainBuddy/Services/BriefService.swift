@@ -199,7 +199,13 @@ final class BriefService {
             return 0
         }
         let descriptor = FetchDescriptor<BriefEntry>(predicate: #Predicate { $0.day >= cutoff })
-        guard let entries = try? context.fetch(descriptor), !entries.isEmpty else { return 0 }
+        guard let fetched = try? context.fetch(descriptor), !fetched.isEmpty else { return 0 }
+
+        // Collapsing runs first, and hands back the survivors. Every pass below
+        // reads properties off these objects, and reading a deleted model is not
+        // something to find out about in the field.
+        let (entries, collapsed) = collapseDuplicates(fetched, in: context)
+        var changed = collapsed
 
         let byIdentifier = Dictionary(
             memories.map { ($0.identifier, $0) },
@@ -234,7 +240,6 @@ final class BriefService {
             grouped[identifier, default: []].append(entry)
         }
 
-        var changed = 0
         for (identifier, group) in grouped {
             guard let memory = byIdentifier[identifier] else { continue }
             changed += reconcile(
@@ -254,6 +259,51 @@ final class BriefService {
             return !reconciled.contains(identifier)
         })
         return changed
+    }
+
+    /// Keeps one open line per memory per day, and removes the rest.
+    ///
+    /// One scanned meeting invitation used to produce five rows. `BriefBuilder`
+    /// stops that happening again, but a brief built before it can't fix itself,
+    /// and those rows are exactly the ones cluttering the screen today. Closed
+    /// lines are never touched: ticking something off is a decision, and the
+    /// record of it is not a duplicate.
+    private func collapseDuplicates(
+        _ entries: [BriefEntry],
+        in context: ModelContext
+    ) -> (kept: [BriefEntry], removed: Int) {
+        var bySource: [String: [BriefEntry]] = [:]
+        for entry in entries where !entry.isClosed {
+            guard let source = entry.sourceIdentifier else { continue }
+            let day = Int(calendar.startOfDay(for: entry.day).timeIntervalSince1970)
+            bySource["\(source.uuidString)-\(day)", default: []].append(entry)
+        }
+
+        var dropped = Set<UUID>()
+        for group in bySource.values where group.count > 1 {
+            let ordered = group.sorted { lhs, rhs in
+                let left = Self.rank(lhs.kind)
+                let right = Self.rank(rhs.kind)
+                return left == right ? lhs.sortIndex < rhs.sortIndex : left < right
+            }
+            for entry in ordered.dropFirst() {
+                dropped.insert(entry.identifier)
+                context.delete(entry)
+            }
+        }
+
+        guard !dropped.isEmpty else { return (entries, 0) }
+        return (entries.filter { !dropped.contains($0.identifier) }, dropped.count)
+    }
+
+    /// What a morning needs first: something happening today, then something to
+    /// do, then something to bear in mind.
+    nonisolated static func rank(_ kind: BriefEntryKind) -> Int {
+        switch kind {
+        case .schedule: return 0
+        case .task: return 1
+        case .point: return 2
+        }
     }
 
     /// Presentation-only clean-up of lines that are already in the brief.
@@ -392,7 +442,12 @@ final class BriefService {
     /// down or summarize the document.
     private func briefSource(for item: MemoryItem) -> BriefSource? {
         let authored = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let summary = item.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A summary the app wrote from a scan is on the same footing as the OCR
+        // it came from: useful to read, not something you committed to. Only a
+        // summary you pressed Save on can put a line in your brief.
+        let summary = item.summaryIsAutomatic
+            ? ""
+            : item.summary.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !authored.isEmpty || !summary.isEmpty else { return nil }
 
         return BriefSource(

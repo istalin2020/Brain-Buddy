@@ -126,6 +126,21 @@ struct MemoryDetailView: View {
                         Text(item.summary)
                             .font(.callout)
                             .textSelection(.enabled)
+
+                        if item.summaryIsAutomatic {
+                            Label(
+                                "Written automatically when this was captured",
+                                systemImage: "wand.and.stars"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                            Button {
+                                adoptSummary()
+                            } label: {
+                                Label("Use this in my brief", systemImage: "tray.and.arrow.down")
+                            }
+                        }
                     }
                     if canSummarize {
                         Button {
@@ -326,6 +341,18 @@ struct MemoryDetailView: View {
                 summaryNotice = "There isn't enough distinct material here to summarize."
             }
         }
+    }
+
+    /// Promotes the app's own summary to one you stand behind.
+    ///
+    /// Until this is pressed, an automatic summary is on the same footing as the
+    /// OCR it came from: readable, searchable, and kept out of your brief —
+    /// because nobody agreed to it.
+    private func adoptSummary() {
+        item.summaryIsAutomatic = false
+        item.touch()
+        summaryNotice = "Saved. Anything in it can now reach your brief."
+        Task { await services.applyEdit(to: item, in: modelContext) }
     }
 
     private func save(_ summary: DiscussionSummarizer.Summary) {

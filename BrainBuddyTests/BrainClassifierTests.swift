@@ -83,6 +83,28 @@ final class BrainClassifierTests: XCTestCase {
         XCTAssertEqual(BrainClassifier.region(for: file), .work)
     }
 
+    /// Two scans of the same bank message landed in two different regions
+    /// because one of them contained a family word exactly once. In a long
+    /// document, one match is a coincidence.
+    func testOneStrayWordInALongDocumentDecidesNothing() {
+        let filler = (0..<80).map { "word\($0)" }.joined(separator: " ")
+        let document = "Transaction with reference id 732379459 processed successfully. \(filler) school"
+
+        XCTAssertEqual(BrainClassifier.region(for: input(document)), .general)
+    }
+
+    /// The same word in a short note is the subject of it.
+    func testOneWordInAShortNoteStillDecides() {
+        XCTAssertEqual(BrainClassifier.region(for: input("School run at eight")), .family)
+    }
+
+    func testALongDocumentThatSaysItTwiceIsClassified() {
+        let filler = (0..<80).map { "word\($0)" }.joined(separator: " ")
+        let document = "Minutes of the site meeting with the contractor. \(filler)"
+
+        XCTAssertEqual(BrainClassifier.region(for: input(document)), .work)
+    }
+
     // MARK: - Work's rooms
 
     func testAnAddressMakesItEmail() {
