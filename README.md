@@ -311,9 +311,7 @@ on:
   age is the useful number: a task open for nine days is a decision you have been
   avoiding, and saying so is more useful than listing it.
 - **What you kept coming back to** — the subjects that recur across the period's
-  captures, which is usually not what you would have guessed. Built by the same
-  grouping as the brain boxes, so the two can never disagree about what your
-  subjects are.
+  captures, which is usually not what you would have guessed.
 - **Questions you left hanging** — sentences you typed that end in a question
   mark and never came back to. People note questions constantly and never revisit
   them; a second brain that can't hand them back is losing the most valuable
@@ -324,34 +322,61 @@ on:
 It shares as **plain text**, because the useful thing to do with a review is
 paste it into the message you were already about to write.
 
-### Brain boxes
+### The brain
 
-The **Brain** tab opens on a grid of boxes, and tapping one narrows the list
-below it.
+The **Brain** tab is a brain: a 3D model you turn with a drag, zoom with a
+pinch, and tap to open a region.
 
-The obvious grouping — one box per kind — is useless for how a capture app
-actually gets used: nearly everything is a typed note, so you end up with one
-box holding everything and four empty ones. So the boxes that lead are the
-**subjects that recur in your own words** — "Tower", "PCH", "Yard" — read out of
-the text by the same extractor that titles a recording. A subject needs to turn
-up in at least two memories to earn a box (one mention is a detail, not a
-compartment), at most six of them are shown, and a subject that is already one
-of your `#tags` doesn't get a second box under a different name. Your tags come
-next, then the kinds, which are always correct and sometimes exactly what you
-want ("show me the photos").
+It replaced a grid of boxes, which is a filing cabinet with the doors painted
+on. The point of the model is that **position is an index** — the fastest one a
+person has, and the one a list can never use. So every region sits where the
+cortex actually does that job, and after two visits you stop reading labels and
+just point:
 
-Boxes are derived, never stored: nothing to file, nothing to maintain, and a box
-appears or disappears as what you capture changes. The grid is rebuilt when the
-library changes rather than on every redraw, because reading subjects out of a
-memory is two `NLTagger` passes and doing that per scroll frame would stutter.
+| Region | Where it sits | Why there |
+| --- | --- | --- |
+| **Work** | Frontal lobe | The part that plans things. Sub-divided into **Email**, **Reminders** and **Notes**, because work is always too big to be one room. |
+| **Family** | Limbic core | The emotional-memory structures, in the middle, half-hidden behind everything else. |
+| **Friends & relatives** | Parietal lobe | Social cognition lives around the temporoparietal junction. |
+| **Images** | Occipital lobe | The visual cortex, at the back of the head. |
+| **Video & voice** | Temporal lobe | The auditory cortex, out to the side. |
+| **General** | Cerebellum | Everything that didn't need a room of its own. |
 
-**Every row says one thing once.** Rows used to show a heading with the body
-underneath, which for a typed note is the same sentence twice — the title *is*
-the opening of the body. Now a row shows the heading, then only what the heading
-left out: a saved summary's first key point when there is one, otherwise the
-rest of the body, and nothing at all when that would just restate the heading.
-The kind and the date it entered your brain sit down the right edge, out of the
-reading column, so they're scannable instead of something to read past.
+The model is **built in code, not downloaded**: six low-poly lobes, a stem, three
+lights. A photoreal brain would be a twenty-megabyte asset, would take a second
+to appear, and would be *harder* to read — what matters here is telling six
+regions apart at a glance and hitting one with a thumb, which flat colour does
+better than anatomy. Regions swell slightly with how much is in them, so the
+shape of your own brain is visible before you read a number, and an empty region
+recedes rather than disappearing — you still need to see that the room exists.
+
+Under the model the same six regions appear as chips. That is not a duplicate
+control: a lobe is a small target, some hide behind others until you turn the
+model, and VoiceOver cannot tap a mesh. The chips are the accessible,
+one-handed path to exactly the same thing.
+
+**Three steps to a document, each a bigger commitment than the last.** Open a
+region and you get names and dates. Tap a name and its key summary opens
+underneath it. Tap the summary and the whole note opens on its own page. That is
+what stops a region holding thirty files from being thirty paragraphs.
+
+**Filing is explainable, and you can overrule it.** `BrainClassifier` runs three
+passes: a `#tag` you typed settles it outright; then what the thing *is* (a photo
+goes to the visual cortex whatever it is about, or the map stops feeling
+consistent); then what it *says*, against a small lexicon per region, with the
+most hits winning and nothing forced anywhere — unmatched memories go to General.
+Both sides of every word comparison are stemmed to a fixpoint, because the search
+stemmer applies one rule per word: `"meetings"` stops at `"meeting"` while the
+lexicon's `"meeting"` becomes `"meet"`, and compared directly they would never
+match. Classification runs off the main actor and only when the library or the
+filter changes.
+
+**No search box — a date filter instead.** Ask is the search; this screen answers
+*"what was I doing in August"*. Pick **Day**, **Month** or **Year** and the row
+underneath fills with the periods you actually captured in, newest first (a month
+with nothing in it isn't worth a tap, and scrolling real months beats guessing in
+a date picker). The filter feeds the model itself: regions shrink, swell and
+empty as you move through time.
 
 ### Search (typed or spoken)
 
@@ -479,7 +504,9 @@ lands in a morning brief and what's correctly left out of it, the stored-summary
 round trip the brief depends on, the reconciliation that rewords a brief line
 when its note is edited (and the guards that stop it deleting one), the
 presentation rules that keep a thousands separator out of a headline, which
-memories land in which brain box (and
+region of the cortex a memory is filed in (and the stemming fixpoint that makes
+its lexicons work at all), the day/month/year filter, which memories land in
+which brain box (and
 which subjects are too rare to earn one), the row-summary rule that stops a
 heading being repeated underneath itself, which links `ConnectionFinder` will and
 won't make (including the one that matters — a word you write constantly links
@@ -499,7 +526,7 @@ BrainBuddy/
   App/          BrainBuddyApp, AppServices (shared singletons), PersistenceController,
                 BrainBuddyIntents (Siri / Shortcuts + the hand-off mailbox)
   Models/       MemoryItem, MemoryAttachment, MemoryTag, BriefEntry  (SwiftData + CloudKit),
-                BrainBox (how the Brain tab groups a library — no SwiftData, so it is testable)
+                BrainRegion (the cortex map), BrainBox (subject grouping for the review)
   Search/       Tokenizer, BM25Index, VectorMath, EmbeddingService,
                 SearchEngine (hybrid ranking), AnswerComposer
   Services/     IngestService (the one capture path), TextAnalysis, TextRecognizer,
@@ -511,10 +538,12 @@ BrainBuddy/
                 NotificationScheduler, NotificationRouter
   Services/     … SharedInbox (App Group hand-off from the extension),
                 QuickCaptureQueue (Siri hand-off), SpotlightIndexer (iPhone Search),
-                ConnectionFinder (automatic links), ReviewBuilder (the review)
+                ConnectionFinder (automatic links), ReviewBuilder (the review),
+                BrainClassifier (which region a memory lands in), PeriodFilter
   Views/        RootView, TodayView, ReviewView, CaptureView (Input),
-                VoiceCaptureView, LibraryView (Brain), MemoryDetailView, AskView,
-                SettingsView, Components/
+                VoiceCaptureView, BrainView (the 3D brain) + TrashView,
+                MemoryDetailView, AskView, SettingsView,
+                Components/ (incl. BrainSceneView — the model, built in code)
   Resources/    Assets.xcassets, PrivacyInfo.xcprivacy
 BrainBuddyShare/  ShareViewController — the share extension
 BrainBuddyTests/

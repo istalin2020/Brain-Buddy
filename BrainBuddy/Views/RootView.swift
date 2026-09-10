@@ -26,8 +26,8 @@ struct RootView: View {
                 .tabItem { Label("Input", systemImage: "plus.circle.fill") }
                 .tag(Tab.capture)
 
-            LibraryView()
-                .tabItem { Label("Brain", systemImage: "square.stack.3d.up") }
+            BrainView()
+                .tabItem { Label("Brain", systemImage: "brain.head.profile") }
                 .tag(Tab.library)
 
             AskView()

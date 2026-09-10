@@ -36,32 +36,18 @@ struct BrainBoxIndex {
     var boxes: [BrainBox] = []
     /// Memory id → the topic keys it was filed under.
     var topics: [UUID: Set<String>] = [:]
-
-    func contains(_ item: MemoryItem, in box: BrainBox) -> Bool {
-        switch box.filter {
-        case .everything:
-            return true
-        case .kind(let kind):
-            return item.kind == kind
-        case .tag(let name):
-            return item.tagNames.contains(name)
-        case .topic(let key):
-            return topics[item.identifier]?.contains(key) ?? false
-        }
-    }
 }
 
-/// Sorts a library into boxes.
+/// Groups a library by the subjects that recur in it.
 ///
-/// The obvious grouping — one box per kind — is useless for how people actually
-/// use a capture app: nearly everything is a typed note, so you get one box with
-/// everything in it and four empty ones. So the boxes that lead are the
-/// **subjects that recur in your own words**: "PCH", "Tower", "Yard". They come
-/// out of the text rather than a taxonomy someone invented, which is what makes
-/// them match how you think about it.
+/// The subjects come out of your own text — "PCH", "Tower", "Yard" — rather than
+/// from a taxonomy someone invented, which is what makes them match how you
+/// think about the work. Tags and kinds follow, because they're always correct.
 ///
-/// Kinds and tags follow, because they're always correct and sometimes exactly
-/// what you want ("show me the photos").
+/// This used to draw the Brain tab, which is now a 3D cortex map
+/// (`BrainClassifier`). What it still does is answer *"what did you keep coming
+/// back to"* for the weekly review — the one place where recurring subjects, and
+/// not fixed regions, are the question.
 enum BrainBoxBuilder {
     /// A subject needs to appear in at least this many memories to earn a box.
     /// One mention is a detail, not a compartment.

@@ -276,7 +276,10 @@ enum BriefBuilder {
     }
 
     /// Words that name a day rather than a time of day.
-    private static let dayWords: Set<String> = [
+    ///
+    /// Shared with `BrainClassifier`, so the brain's idea of "this mentions a
+    /// day" and the brief's can't drift apart.
+    static let dayWords: Set<String> = [
         "today", "tonight", "tomorrow", "tmrw", "yesterday",
         "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
         "mon", "tue", "tues", "wed", "weds", "thu", "thur", "thurs", "fri", "sat", "sun",
