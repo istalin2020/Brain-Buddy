@@ -22,6 +22,15 @@ enum MemoryKind: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    /// Longer form for places that name where a line came from, where "Voice"
+    /// on its own reads like a fragment.
+    var sourceLabel: String {
+        switch self {
+        case .voice: return "Voice note"
+        default: return title
+        }
+    }
+
     var systemImage: String {
         switch self {
         case .note: return "text.alignleft"
@@ -50,11 +59,39 @@ final class MemoryItem {
 
     var title: String = ""
 
+    /// Set once the user edits this memory themselves, so that re-deriving
+    /// subjects in bulk can never overwrite a title somebody chose.
+    var hasCustomTitle: Bool = false
+
     /// The primary body: what you typed, or the transcript of what you said.
     var text: String = ""
 
     /// Text machine-extracted from attachments (OCR, PDF text layer).
     var extractedText: String = ""
+
+    /// A summary the user asked for and saved — key points and follow-ups pulled
+    /// out of a long transcript. Empty until they press Save on one, because an
+    /// unsaved summary is a suggestion, not a fact about the memory.
+    ///
+    /// Added after the first release. CloudKit mirroring accepts new attributes
+    /// that carry a default value, so existing records simply read back "".
+    var summary: String = ""
+
+    /// True when nobody has reviewed `summary` — the app wrote it at capture so
+    /// a scan or a recording has something readable under its name.
+    ///
+    /// The distinction matters beyond labelling: a summary you pressed Save on
+    /// is treated as something you *said*, and can put lines in your morning
+    /// brief. One the app wrote from a document cannot, for the same reason OCR
+    /// text can't — see `BriefService`.
+    ///
+    /// Added after the first release; CloudKit mirroring accepts new attributes
+    /// that carry a default, so existing records read back `false`.
+    var summaryIsAutomatic: Bool = false
+
+    /// Hash of this capture's own content, used to recognise the same thing
+    /// arriving twice. Empty for anything captured before this existed.
+    var contentFingerprint: String = ""
 
     var kindRaw: String = MemoryKind.note.rawValue
 
@@ -116,9 +153,14 @@ extension MemoryItem {
         keywordIndex.split(separator: " ").map(String.init)
     }
 
+    var hasSummary: Bool {
+        !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// Everything a search should look at, in one string.
     var searchableText: String {
         var parts = [title, text]
+        if !summary.isEmpty { parts.append(summary) }
         if !extractedText.isEmpty { parts.append(extractedText) }
         if !source.isEmpty { parts.append(source) }
         let names = tagNames
@@ -137,6 +179,96 @@ extension MemoryItem {
 
     var displayTitle: String {
         title.isEmpty ? (preview.isEmpty ? "Untitled" : String(preview.prefix(60))) : title
+    }
+
+    /// The one line worth reading under the heading in a list — or nothing.
+    ///
+    /// Rows used to show `displayTitle` with `preview` beneath it, which for a
+    /// typed note is the same sentence twice: the title *is* the first sixty
+    /// characters of the body. So this prefers a saved summary's first key
+    /// point, falls back to the body, and returns "" when whatever it picked
+    /// only restates the heading. A row that says one thing once is shorter and
+    /// tells you more.
+    var listSummary: String {
+        let heading = displayTitle
+
+        let lead = summaryLead
+        if !lead.isEmpty, !Self.restates(lead, heading) {
+            return Self.clip(lead, to: Self.listSummaryLimit)
+        }
+
+        let rest = Self.remainder(of: preview, beyond: heading)
+        guard rest.count >= Self.minimumSummaryLength else { return "" }
+        return Self.clip(rest, to: Self.listSummaryLimit)
+    }
+
+    /// Roughly two lines at footnote size on a phone.
+    private static let listSummaryLimit = 150
+
+    /// Below this, what's left of the body after the heading is a fragment
+    /// rather than a summary, and the row reads better without it.
+    private static let minimumSummaryLength = 24
+
+    /// The saved summary reduced to its most useful single line: what was
+    /// decided, else what it was about.
+    private var summaryLead: String {
+        guard hasSummary, let parsed = DiscussionSummarizer.parse(summary) else { return "" }
+        if let point = parsed.keyPoints.first { return point }
+        if let followUp = parsed.followUps.first { return followUp }
+        guard !parsed.topics.isEmpty else { return "" }
+        return parsed.topics.joined(separator: ", ")
+    }
+
+    /// True when `candidate` opens with the same words as the heading, which is
+    /// what happens whenever the title was derived from the body. Compared on
+    /// normalized tokens so punctuation and an ellipsis don't hide it.
+    private static func restates(_ candidate: String, _ heading: String) -> Bool {
+        let headingTokens = Tokenizer.tokens(in: heading)
+        guard !headingTokens.isEmpty else { return false }
+        let candidateTokens = Tokenizer.tokens(in: candidate)
+        guard candidateTokens.count >= headingTokens.count else {
+            return candidateTokens == Array(headingTokens.prefix(candidateTokens.count))
+        }
+        return Array(candidateTokens.prefix(headingTokens.count)) == headingTokens
+    }
+
+    /// What the body still has to say once the heading has been read.
+    ///
+    /// Titles are derived from the text (see `TextAnalysis.suggestedTitle`), so
+    /// the body normally opens with the heading word for word. Showing it again
+    /// is the duplication this whole property exists to remove — but the *rest*
+    /// of the body usually is the summary, so it is kept.
+    private static func remainder(of text: String, beyond heading: String) -> String {
+        guard restates(text, heading) else { return text }
+
+        // Dropped by word count rather than by matching the heading string,
+        // because a derived heading is sometimes a condensed version of the
+        // opening rather than a literal prefix of it. Over-keeping a word reads
+        // fine; failing to match at all would throw the summary away.
+        let spoken = heading.trimmingCharacters(in: headingNoise)
+            .split(separator: " ", omittingEmptySubsequences: true)
+            .count
+        guard spoken > 0 else { return text }
+
+        let rest = text
+            .split(separator: " ", omittingEmptySubsequences: true)
+            .dropFirst(spoken)
+            .joined(separator: " ")
+        return rest.trimmingCharacters(in: headingNoise)
+    }
+
+    /// Punctuation a heading can end on, and that a continuation shouldn't start
+    /// with.
+    private static let headingNoise = CharacterSet(charactersIn: " .,;:-–—…")
+        .union(.whitespacesAndNewlines)
+
+    /// Cuts at a word boundary rather than mid-word, and only adds an ellipsis
+    /// when something was actually removed.
+    private static func clip(_ text: String, to limit: Int) -> String {
+        guard text.count > limit else { return text }
+        let head = text.prefix(limit)
+        let cut = head.lastIndex(of: " ").map { head[head.startIndex..<$0] } ?? head
+        return cut.trimmingCharacters(in: .whitespacesAndNewlines) + "…"
     }
 
     var embedding: [Double]? {

@@ -1,0 +1,447 @@
+import Foundation
+import NaturalLanguage
+
+/// Condenses a long transcript — a meeting, two people talking something over —
+/// into something readable in ten seconds.
+///
+/// **Extractive, like `AnswerComposer`.** Every line of a summary is a sentence
+/// somebody actually said, quoted verbatim. Nothing is generated. That rules out
+/// the one failure a discussion summary must never have: inventing a decision
+/// that was never made, or an owner who never agreed to anything.
+///
+/// Deliberately free of SwiftData, UIKit and the network, so its behavior is
+/// unit-testable without a device.
+enum DiscussionSummarizer {
+    struct Summary: Equatable {
+        /// The recurring subjects, in the speakers' own spelling.
+        var topics: [String]
+        /// The sentences that carry the most of the transcript's own vocabulary.
+        var keyPoints: [String]
+        /// Sentences where somebody committed to something.
+        var followUps: [String]
+
+        var isEmpty: Bool { keyPoints.isEmpty && followUps.isEmpty }
+
+        /// The form that gets stored on the memory and read on screen.
+        ///
+        /// `DiscussionSummarizer.parse` reads this back, so both sides go through
+        /// the shared heading constants rather than repeating the literals.
+        var text: String {
+            var lines: [String] = []
+            if !topics.isEmpty {
+                lines.append(DiscussionSummarizer.topicsPrefix + topics.joined(separator: ", "))
+            }
+            if !keyPoints.isEmpty {
+                if !lines.isEmpty { lines.append("") }
+                lines.append(DiscussionSummarizer.keyPointsHeading)
+                lines.append(contentsOf: keyPoints.map { "\(DiscussionSummarizer.bullet) \($0)" })
+            }
+            if !followUps.isEmpty {
+                if !lines.isEmpty { lines.append("") }
+                lines.append(DiscussionSummarizer.followUpsHeading)
+                lines.append(contentsOf: followUps.map { "\(DiscussionSummarizer.bullet) \($0)" })
+            }
+            return lines.joined(separator: "\n")
+        }
+    }
+
+    static let topicsPrefix = "Topics: "
+    static let keyPointsHeading = "Key points"
+    static let followUpsHeading = "Follow-ups"
+    static let bullet = "•"
+
+    /// Shortest transcript worth condensing. Below this a "summary" would just be
+    /// the transcript with bullets in front of it, which is worse than nothing
+    /// because it implies work was done.
+    static let minimumWords = 25
+
+    // MARK: - Entry point
+
+    /// Returns `nil` when there is not enough material to summarize honestly.
+    static func summarize(
+        _ raw: String,
+        maxKeyPoints: Int = 5,
+        maxFollowUps: Int = 4
+    ) -> Summary? {
+        let transcript = prepared(raw)
+        let sentences = usableSentences(in: transcript)
+        guard sentences.count >= 2 else { return nil }
+        guard wordCount(of: transcript) >= minimumWords else { return nil }
+
+        // Document frequency over the transcript's own sentences: a term that
+        // recurs across a discussion is what the discussion was about.
+        var frequency: [String: Int] = [:]
+        for sentence in sentences {
+            for term in Set(Tokenizer.tokens(in: sentence)) {
+                frequency[term, default: 0] += 1
+            }
+        }
+        guard let peak = frequency.values.max(), peak > 0 else { return nil }
+        let scale = Double(peak)
+
+        let scores = sentences.indices.map { index in
+            score(sentences[index], at: index, frequency: frequency, scale: scale)
+        }
+
+        // Commitments are claimed first, so an agreed action is never demoted to
+        // a key point — and never printed twice under two headings.
+        let followUpIndexes = pick(
+            from: sentences.indices.filter { isCommitment(sentences[$0]) },
+            scores: scores,
+            limit: maxFollowUps,
+            sentences: sentences
+        )
+
+        let remaining = sentences.indices.filter { !followUpIndexes.contains($0) }
+        // Scale with length: a four-sentence chat does not have five key points.
+        let pointBudget = min(maxKeyPoints, max(2, remaining.count / 3))
+        let keyPointIndexes = pick(
+            from: remaining,
+            scores: scores,
+            limit: pointBudget,
+            sentences: sentences
+        )
+
+        let summary = Summary(
+            topics: topics(in: transcript),
+            keyPoints: keyPointIndexes.map { clipped(sentences[$0]) },
+            followUps: followUpIndexes.map { clipped(sentences[$0]) }
+        )
+        return summary.isEmpty ? nil : summary
+    }
+
+    /// Straightens out text that was written as a document rather than spoken.
+    ///
+    /// This was built for transcripts, where the input is a wall of sentences.
+    /// A scanned email or an agenda is a different shape — it arrives already
+    /// bulleted and labelled — and feeding that in raw produced summaries like
+    /// `• • Date & Time:` and lines that were nothing but `Jury Panel:`. Two
+    /// rules fix both:
+    ///
+    /// - **Strip the list markers.** They are the source's formatting; the
+    ///   summary adds its own, and two bullets is a bug you can see from across
+    ///   the room.
+    /// - **A label belongs with its value.** A line ending in a colon is a
+    ///   heading for the line under it, and on its own it says nothing —
+    ///   "Date & Time:" is not a key point, "Date & Time: Wednesday 9 September,
+    ///   11:30" is.
+    static func prepared(_ raw: String) -> String {
+        var lines: [String] = []
+
+        for rawLine in raw.components(separatedBy: .newlines) {
+            var line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+
+            // Written out rather than escaped: a raw string leaves `\u{2022}`
+            // as six characters, and ICU reads `\u` as a four-hex-digit escape,
+            // so the escaped form silently matches nothing.
+            line = line.replacingOccurrences(
+                of: #"^[•·▪◦‣*+\-–—]+\s*"#,
+                with: "",
+                options: .regularExpression
+            )
+            line = line.replacingOccurrences(
+                of: #"^\d{1,2}[.)]\s+"#,
+                with: "",
+                options: .regularExpression
+            )
+
+            line = line.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+
+            if let previous = lines.last, previous.hasSuffix(":") {
+                lines[lines.count - 1] = previous + " " + line
+            } else {
+                lines.append(line)
+            }
+        }
+
+        // A trailing label with nothing under it is still just a label.
+        if let last = lines.last, last.hasSuffix(":") { lines.removeLast() }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Longest a single summary line may be.
+    ///
+    /// Conversation transcribed from speech often has almost no sentence
+    /// punctuation, so one "sentence" can run to hundreds of words. Quoting it
+    /// whole reproduces the transcript under a heading that promises a summary,
+    /// which is worse than saying nothing — it looks like work was done.
+    static let maximumLineLength = 200
+
+    private static func clipped(_ sentence: String) -> String {
+        AnswerComposer.tighten(sentence, limit: maximumLineLength)
+    }
+
+    // MARK: - Reading a stored summary back
+
+    /// Parses the rendered form produced by `Summary.text`.
+    ///
+    /// Summaries are stored as text rather than as structured fields — one
+    /// CloudKit-mirrored `String` instead of three, and it's what the user reads.
+    /// The morning brief needs the structure back, though: key points and
+    /// follow-ups belong in different sections of the brief.
+    static func parse(_ stored: String) -> Summary? {
+        guard !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+
+        enum Section { case keyPoints, followUps }
+        var section: Section = .keyPoints
+        var topics: [String] = []
+        var keyPoints: [String] = []
+        var followUps: [String] = []
+
+        for rawLine in stored.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+
+            if line.hasPrefix(topicsPrefix) {
+                topics = line.dropFirst(topicsPrefix.count)
+                    .components(separatedBy: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                continue
+            }
+            if line == keyPointsHeading { section = .keyPoints; continue }
+            if line == followUpsHeading { section = .followUps; continue }
+
+            guard line.hasPrefix(bullet) else { continue }
+            let body = line.dropFirst(bullet.count).trimmingCharacters(in: .whitespaces)
+            guard !body.isEmpty else { continue }
+            switch section {
+            case .keyPoints: keyPoints.append(body)
+            case .followUps: followUps.append(body)
+            }
+        }
+
+        let summary = Summary(topics: topics, keyPoints: keyPoints, followUps: followUps)
+        return summary.isEmpty && topics.isEmpty ? nil : summary
+    }
+
+    // MARK: - Sentence selection
+
+    /// Sentences worth quoting. Drops the "yeah", "okay, right" fragments that
+    /// make up a third of any real conversation.
+    private static func usableSentences(in transcript: String) -> [String] {
+        Tokenizer.sentences(in: transcript)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { wordCount(of: $0) >= 4 }
+    }
+
+    /// Mean term weight rather than the sum, so one rambling sentence can't win
+    /// on sheer volume. Openings get a nudge: people state the subject first.
+    private static func score(
+        _ sentence: String,
+        at index: Int,
+        frequency: [String: Int],
+        scale: Double
+    ) -> Double {
+        let terms = Set(Tokenizer.tokens(in: sentence))
+        guard !terms.isEmpty else { return 0 }
+        let weight = terms.reduce(0.0) { $0 + Double(frequency[$1] ?? 0) / scale }
+        var value = weight / Double(terms.count).squareRoot()
+        if index == 0 { value *= 1.15 }
+        return value
+    }
+
+    /// Takes the best `limit` candidates, drops near-duplicates, and returns them
+    /// in transcript order — a summary that jumps around in time is hard to read.
+    private static func pick(
+        from candidates: [Int],
+        scores: [Double],
+        limit: Int,
+        sentences: [String]
+    ) -> [Int] {
+        guard limit > 0 else { return [] }
+        // Index breaks score ties, so the result never depends on sort stability.
+        let ranked = candidates.sorted { lhs, rhs in
+            scores[lhs] == scores[rhs] ? lhs < rhs : scores[lhs] > scores[rhs]
+        }
+
+        var chosen: [Int] = []
+        var chosenTerms: [Set<String>] = []
+        for index in ranked where chosen.count < limit {
+            let terms = Set(Tokenizer.tokens(in: sentences[index]))
+            guard !terms.isEmpty else { continue }
+            // People repeat themselves when they talk, and documents repeat
+            // themselves by design — an agenda states the same meeting three
+            // ways. Two restatements of one point must not spend two slots.
+            guard !chosenTerms.contains(where: { restates(terms, $0) }) else { continue }
+            chosen.append(index)
+            chosenTerms.append(terms)
+        }
+        return chosen.sorted()
+    }
+
+    /// Whether one line says what another already said.
+    ///
+    /// Plain overlap misses the common case: *"Your jury round is scheduled"*
+    /// and *"Your AI Hackathon Jury Round — Wed, 9 Sep, 11:30"* share only two
+    /// words out of ten, so they scored as different points and both appeared.
+    /// Containment catches it — the shorter line is almost entirely inside the
+    /// longer one — while the two-word floor stops a pair of three-word lines
+    /// merging on a single coincidence.
+    static func restates(_ lhs: Set<String>, _ rhs: Set<String>) -> Bool {
+        if overlap(lhs, rhs) > 0.7 { return true }
+        let shared = lhs.intersection(rhs).count
+        return shared >= 2 && containment(lhs, rhs) >= 0.62
+    }
+
+    private static func containment(_ lhs: Set<String>, _ rhs: Set<String>) -> Double {
+        let smaller = min(lhs.count, rhs.count)
+        guard smaller > 0 else { return 0 }
+        return Double(lhs.intersection(rhs).count) / Double(smaller)
+    }
+
+    private static func overlap(_ lhs: Set<String>, _ rhs: Set<String>) -> Double {
+        let union = lhs.union(rhs)
+        guard !union.isEmpty else { return 0 }
+        return Double(lhs.intersection(rhs).count) / Double(union.count)
+    }
+
+    // MARK: - Commitments
+
+    /// Phrases that mark a sentence as something somebody took on. Matched
+    /// against a space-padded, contraction-expanded form so `will` doesn't fire
+    /// inside "willing" and `let's` matches however the recognizer spelled it.
+    private static let commitmentCues: [String] = [
+        " action item", " assign", " deadline", " due ", " follow up",
+        " has to ", " have to ", " let us ", " must ", " need to ", " needs to ",
+        " next step", " priority", " should ", " will ", " going to "
+    ]
+
+    static func isCommitment(_ sentence: String) -> Bool {
+        let padded = " " + expandedForMatching(sentence) + " "
+        return commitmentCues.contains { padded.contains($0) }
+    }
+
+    /// Whether a sentence describes something that still has to happen.
+    ///
+    /// Broader than `isCommitment`, because people do not write down their work in
+    /// the first person. Real captures look like *"Study the stringing execution
+    /// improvement"* and *"Method statement to be reviewed by the testing
+    /// agency"* — an instruction and an obligation, neither of which contains
+    /// "I have to". Waiting for a to-do to phrase itself as a commitment is how a
+    /// brief stays empty while the actual work sits in the library.
+    static func isActionable(_ sentence: String) -> Bool {
+        if isCommitment(sentence) { return true }
+
+        let padded = " " + expandedForMatching(sentence) + " "
+        if obligationCues.contains(where: { padded.contains($0) }) { return true }
+
+        // Checked per clause, not just at the start: "Leap meeting, study the
+        // stringing execution" hides its instruction after the comma.
+        return sentence
+            .components(separatedBy: ",")
+            .contains { opensWithAnInstruction($0) }
+    }
+
+    /// Passive and elliptical ways of saying something is outstanding.
+    private static let obligationCues: [String] = [
+        " to be ", " pending", " asap", " outstanding", " awaiting", " yet to "
+    ]
+
+    /// Whether a clause opens with a bare verb, which in a note to yourself is an
+    /// instruction: "Send the drawings", "Review the schedule".
+    ///
+    /// Tagged in place rather than in isolation — half of English verbs are also
+    /// nouns, and `NLTagger` needs the rest of the clause to tell them apart.
+    static func opensWithAnInstruction(_ clause: String) -> Bool {
+        let trimmed = clause.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.hasSuffix("?") else { return false }
+
+        let words = trimmed.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        guard words.count >= 2 else { return false }
+        let opener = words[0].trimmingCharacters(in: CharacterSet.letters.inverted).lowercased()
+        guard opener.count > 1, !nonImperativeOpeners.contains(opener) else { return false }
+
+        let tagger = NLTagger(tagSchemes: [.lexicalClass])
+        tagger.string = trimmed
+        guard let first = trimmed.firstIndex(where: { $0.isLetter }) else { return false }
+        let tag = tagger.tag(at: first, unit: .word, scheme: .lexicalClass).0
+        return tag == .verb
+    }
+
+    /// Words that begin a statement rather than an instruction, whatever the
+    /// tagger makes of them.
+    private static let nonImperativeOpeners: Set<String> = [
+        "am", "are", "be", "been", "being", "did", "do", "does", "had", "has",
+        "have", "he", "his", "how", "i", "is", "it", "its", "may", "might",
+        "she", "that", "the", "their", "there", "these", "they", "this", "was",
+        "we", "were", "what", "when", "where", "which", "who", "why", "you", "your"
+    ]
+
+    private static func expandedForMatching(_ sentence: String) -> String {
+        sentence
+            .lowercased()
+            .replacingOccurrences(of: "\u{2019}", with: "'")
+            .replacingOccurrences(of: "let's", with: "let us")
+            .replacingOccurrences(of: "n't", with: " not")
+            .replacingOccurrences(of: "'ll", with: " will")
+            .replacingOccurrences(of: "gonna", with: "going to")
+    }
+
+    // MARK: - Topics
+
+    /// The recurring nouns and names, keeping the spelling the speaker used —
+    /// stemmed keywords are right for the search index and unreadable in a
+    /// heading ("materi", "prioriti").
+    static func topics(in text: String, limit: Int = 4) -> [String] {
+        guard !text.isEmpty else { return [] }
+
+        var weights: [String: Double] = [:]
+        var display: [String: String] = [:]
+        let options: NLTagger.Options = [.omitPunctuation, .omitWhitespace, .omitOther]
+        let range = text.startIndex..<text.endIndex
+
+        func note(_ word: String, weight: Double) {
+            let key = word.lowercased()
+            guard key.count > 2 else { return }
+            guard !Tokenizer.stopwords.contains(key), !Tokenizer.questionFillers.contains(key) else { return }
+            // "Topics: Jury, Sep, idea, minutes" — half of that is a date and a
+            // filler word. A subject is what the thing was *about*.
+            guard !BriefText.timeWords.contains(key), !BriefText.fillerWords.contains(key) else { return }
+            guard !BriefBuilder.dayWords.contains(key) else { return }
+            guard key.rangeOfCharacter(from: .decimalDigits) == nil else { return }
+            weights[key, default: 0] += weight
+            // Prefer a capitalized spelling when one exists: "PCH", not "pch".
+            if let existing = display[key] {
+                if word.first?.isUppercase == true, existing.first?.isUppercase != true {
+                    display[key] = word
+                }
+            } else {
+                display[key] = word
+            }
+        }
+
+        let lexical = NLTagger(tagSchemes: [.lexicalClass])
+        lexical.string = text
+        lexical.enumerateTags(in: range, unit: .word, scheme: .lexicalClass, options: options) { tag, wordRange in
+            if tag == .noun { note(String(text[wordRange]), weight: 1) }
+            return true
+        }
+
+        // Who and what was named carries more of a discussion than any noun.
+        let names = NLTagger(tagSchemes: [.nameType])
+        names.string = text
+        names.enumerateTags(in: range, unit: .word, scheme: .nameType, options: options) { tag, wordRange in
+            guard let tag, [.personalName, .placeName, .organizationName].contains(tag) else { return true }
+            note(String(text[wordRange]), weight: 2)
+            return true
+        }
+
+        return weights
+            .sorted { lhs, rhs in
+                lhs.value == rhs.value ? lhs.key < rhs.key : lhs.value > rhs.value
+            }
+            .prefix(limit)
+            .compactMap { display[$0.key] }
+    }
+
+    // MARK: - Helpers
+
+    /// Shared with the capture path, which uses it to decide whether a scan
+    /// has enough words in it to be worth summarizing at all.
+    static func wordCount(of text: String) -> Int {
+        text.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count
+    }
+}

@@ -9,18 +9,32 @@ struct SettingsView: View {
     @Query private var allMemories: [MemoryItem]
     @Query private var allAttachments: [MemoryAttachment]
 
-    @AppStorage(PreferenceKey.speakAnswers) private var speakAnswers = true
+    @AppStorage(PreferenceKey.speakAnswers) private var speakAnswers = false
     @AppStorage(PreferenceKey.semanticSearch) private var semanticSearch = true
     @AppStorage(PreferenceKey.autoStopDictation) private var autoStopDictation = true
+    @AppStorage(PreferenceKey.backgroundRecording) private var backgroundRecording = true
+    @AppStorage(PreferenceKey.morningBrief) private var morningBrief = true
+    @AppStorage(PreferenceKey.morningBriefHour) private var briefHour = 8
+    @AppStorage(PreferenceKey.morningBriefMinute) private var briefMinute = 0
+    @AppStorage(PreferenceKey.reminderCount) private var reminderCount = 7
+    @AppStorage(PreferenceKey.transcriptionLocale) private var transcriptionLocale = ""
+    @AppStorage(PreferenceKey.serverTranscription) private var serverTranscription = false
+    @AppStorage(PreferenceKey.systemSearch) private var systemSearch = true
 
     @State private var reindexProgress: Double?
     @State private var pendingSharedItems = 0
+    @State private var pendingQuickCaptures = 0
+    @State private var spotlightNotice: String?
 
     var body: some View {
         NavigationStack {
             List {
                 syncSection
+                briefSection
                 searchSection
+                transcriptionSection
+                recordingSection
+                systemSearchSection
                 sharingSection
                 storageSection
                 maintenanceSection
@@ -29,10 +43,18 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .task {
                 pendingSharedItems = SharedInbox.pendingFiles().count
+                pendingQuickCaptures = QuickCaptureQueue.pendingCount
                 await services.syncMonitor.refresh()
+                await services.notifications.refresh()
             }
+            .onChange(of: morningBrief) { _, _ in rescheduleBrief() }
+            .onChange(of: briefHour) { _, _ in rescheduleBrief() }
+            .onChange(of: briefMinute) { _, _ in rescheduleBrief() }
+            .onChange(of: reminderCount) { _, _ in rescheduleBrief() }
             .onChange(of: semanticSearch) { _, _ in services.applyPreferences() }
             .onChange(of: autoStopDictation) { _, _ in services.applyPreferences() }
+            .onChange(of: backgroundRecording) { _, _ in services.applyPreferences() }
+            .onChange(of: systemSearch) { _, isOn in applySystemSearch(isOn) }
         }
     }
 
@@ -74,17 +96,143 @@ struct SettingsView: View {
         }
     }
 
+    private var briefSection: some View {
+        Section {
+            Toggle("Daily reminder", isOn: $morningBrief)
+
+            if morningBrief {
+                DatePicker("First reminder", selection: briefTimeBinding, displayedComponents: .hourAndMinute)
+
+                Stepper(value: $reminderCount, in: 1...NotificationScheduler.maximumRemindersPerDay) {
+                    LabeledContent(
+                        "Reminders a day",
+                        value: reminderCount == 1 ? "1" : "\(reminderCount)"
+                    )
+                }
+
+                if let next = services.notifications.nextTrigger {
+                    LabeledContent(
+                        "Next reminder",
+                        value: next.formatted(date: .abbreviated, time: .shortened)
+                    )
+                }
+            }
+
+            if services.notifications.isDenied {
+                Text("Notifications are off for Brain Buddy in iOS Settings, so the reminder can't be delivered. Your brief still builds when you open the app.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        } header: {
+            Text("Morning brief")
+        } footer: {
+            Text("The first reminder frames the day; the rest are single nudges, each naming one thing still open, spread evenly from that time until 9pm. They're dealt from your open lines at random without repeating, so a handful of tasks cycle rather than one being repeated all day.\n\nA notification's text is fixed when it's scheduled — iOS doesn't wake the app to ask — so the set is rebuilt whenever the brief changes and whenever you open the app. Between those moments a reminder can name something you've since closed. Nothing is computed on a server; it all comes from what's already on this device.")
+        }
+    }
+
+    /// The stored hour and minute, surfaced as the `Date` a `DatePicker` wants.
+    private var briefTimeBinding: Binding<Date> {
+        Binding(
+            get: {
+                Calendar.current.date(
+                    bySettingHour: briefHour,
+                    minute: briefMinute,
+                    second: 0,
+                    of: Date()
+                ) ?? Date()
+            },
+            set: { newValue in
+                let parts = Calendar.current.dateComponents([.hour, .minute], from: newValue)
+                briefHour = parts.hour ?? 8
+                briefMinute = parts.minute ?? 0
+            }
+        )
+    }
+
+    /// Flipping the switch *is* the permission request, so this path prompts —
+    /// unlike the silent reapply at launch.
+    private func rescheduleBrief() {
+        Task {
+            await services.applyMorningBriefPreference(
+                pending: services.brief.openSubjects(in: modelContext)
+            )
+        }
+    }
+
     private var searchSection: some View {
         Section {
-            Toggle("Speak answers aloud", isOn: $speakAnswers)
+            Toggle("Read answers aloud automatically", isOn: $speakAnswers)
             Toggle("Match by meaning", isOn: $semanticSearch)
             Toggle("Stop listening after a pause", isOn: $autoStopDictation)
         } header: {
             Text("Search & voice")
         } footer: {
-            Text(semanticSearch
-                 ? "Meaning matching uses Apple's on-device language models, so questions work even when you don't remember your exact words. Nothing is sent anywhere."
-                 : "Only keyword matching is used. Faster on very large libraries, but you'll need to recall the wording you saved.")
+            Text(speakAnswers
+                 ? "Answers are spoken as soon as they appear. Every answer also has a Read aloud button, so you can leave this off and choose per answer."
+                 : "Answers stay silent. Tap Read aloud on an answer when you want to hear it.\n\n"
+                   + (semanticSearch
+                      ? "Meaning matching uses Apple's on-device language models, so questions work even when you don't remember your exact words. Nothing is sent anywhere."
+                      : "Only keyword matching is used. Faster on very large libraries, but you'll need to recall the wording you saved."))
+        }
+    }
+
+    private var transcriptionSection: some View {
+        Section {
+            Picker("Spoken language", selection: $transcriptionLocale) {
+                Text("Device language").tag("")
+                ForEach(Self.recognitionLocales, id: \.identifier) { locale in
+                    Text(Self.name(of: locale)).tag(locale.identifier)
+                }
+            }
+            .pickerStyle(.navigationLink)
+
+            Toggle("Higher accuracy transcription", isOn: $serverTranscription)
+        } header: {
+            Text("Transcription")
+        } footer: {
+            Text("""
+            Pick the language you actually speak in recordings. A recognizer set to \
+            the wrong one doesn't fail — it spells what it hears as words from the \
+            language it expects, which reads like a transcript and means nothing. If \
+            you mix English into another language, the regional variant usually wins.
+
+            \(serverTranscription
+              ? "Higher accuracy sends the audio to Apple's speech servers. It is much better on long, multi-speaker recordings — and it is the one thing in this app that leaves your device."
+              : "Transcription runs entirely on this iPhone. That keeps recordings private, but the on-device model is built for short dictation and struggles with long conversations. Turn on higher accuracy to use Apple's servers instead.")
+            """)
+        }
+    }
+
+    /// Built once: the list runs to dozens of entries and never changes at runtime.
+    private static let recognitionLocales = SpeechTranscriber.supportedLocales()
+
+    private static func name(of locale: Locale) -> String {
+        let described = Locale.current.localizedString(forIdentifier: locale.identifier)
+        return described ?? locale.identifier
+    }
+
+    private var recordingSection: some View {
+        Section {
+            Toggle("Keep recording in the background", isOn: $backgroundRecording)
+
+            // The one thing that can silently defeat the toggle above, reported
+            // from the running bundle rather than assumed.
+            LabeledContent(
+                "Off-screen recording",
+                value: AudioRecorder.declaresBackgroundAudio ? "Allowed" : "Blocked by this build"
+            )
+
+            if !AudioRecorder.declaresBackgroundAudio {
+                Text("The app is missing the Background Modes › Audio capability, so iOS suspends it seconds after it leaves the screen. Add it on the BrainBuddy target under Signing & Capabilities, or check that Configuration/BrainBuddy-Info.plist is the target's Info.plist file.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        } header: {
+            Text("Voice recording")
+        } footer: {
+            Text(backgroundRecording
+                 ? "Recording continues when the screen locks or you switch apps, so you can capture a long discussion without keeping Brain Buddy open. A phone call pauses it and it resumes afterwards."
+                 : "Recording pauses when you leave the app and waits for you to come back. Nothing already recorded is lost — but nothing is captured while you're away.")
         }
     }
 
@@ -97,6 +245,51 @@ struct SettingsView: View {
             LabeledContent("Indexed for meaning", value: "\(allMemories.filter { $0.embeddingData != nil }.count)")
         } header: {
             Text("Your brain")
+        }
+    }
+
+    /// System search and Siri, together: both are ways of reaching your brain
+    /// without opening the app, and both are worth telling people exist.
+    private var systemSearchSection: some View {
+        Section {
+            Toggle("Find my notes in iPhone Search", isOn: $systemSearch)
+
+            if systemSearch {
+                Button {
+                    rebuildSpotlight()
+                } label: {
+                    Label("Re-publish everything to iPhone Search", systemImage: "magnifyingglass.circle")
+                }
+            }
+
+            if let spotlightNotice {
+                Text(spotlightNotice)
+                    .font(.caption)
+                    .foregroundStyle(Color.accentColor)
+            }
+
+            if pendingQuickCaptures > 0 {
+                LabeledContent("Said to Siri, not yet filed", value: "\(pendingQuickCaptures)")
+                Button("File them now") {
+                    Task {
+                        await services.ingest.drainQuickCaptures(into: modelContext)
+                        pendingQuickCaptures = QuickCaptureQueue.pendingCount
+                    }
+                }
+            }
+        } header: {
+            Text("Siri & iPhone Search")
+        } footer: {
+            Text("""
+            Say “Remember this in Brain Buddy” and the thought is saved without the \
+            app opening — it's filed, titled and indexed the next time you do open \
+            it. “Ask Brain Buddy” opens the answer, and “What's on today in Brain \
+            Buddy” opens your brief.
+
+            \(systemSearch
+              ? "Your memories also appear when you pull down on the Home Screen and type. The index is local to this iPhone and holds a title, a short summary and keywords — never attachments or full transcripts."
+              : "Your memories are hidden from iPhone Search. They stay searchable inside the app.")
+            """)
         }
     }
 
@@ -134,13 +327,13 @@ struct SettingsView: View {
                 Button {
                     reindexAll()
                 } label: {
-                    Label("Rebuild all search indexes", systemImage: "arrow.clockwise")
+                    Label("Rebuild subjects and search indexes", systemImage: "arrow.clockwise")
                 }
             }
         } header: {
             Text("Maintenance")
         } footer: {
-            Text("Useful after restoring from iCloud on a new device, or if search results look stale. Nothing is deleted.")
+            Text("Re-derives the subject of everything you haven't titled yourself and rebuilds the search index. Useful after restoring from iCloud on a new device, or if subjects and results look stale. Nothing is deleted, and titles you typed are left alone.")
         }
     }
 
@@ -166,12 +359,33 @@ struct SettingsView: View {
         reindexProgress = 0
         Task {
             for (index, item) in items.enumerated() {
+                // Subjects are derived once at capture, so improving the
+                // derivation does nothing for what's already saved.
+                services.ingest.refreshSubject(of: item)
                 await services.ingest.finalize(item, in: modelContext)
                 reindexProgress = Double(index + 1) / Double(items.count)
             }
             services.search.invalidateCache()
             reindexProgress = nil
         }
+    }
+
+    /// Turning the preference off has to remove what was already published, or
+    /// "hidden from iPhone Search" would be a claim rather than a fact.
+    private func applySystemSearch(_ isOn: Bool) {
+        if isOn {
+            rebuildSpotlight()
+        } else {
+            SpotlightIndexer.removeEverything()
+            spotlightNotice = "Removed from iPhone Search."
+        }
+    }
+
+    private func rebuildSpotlight() {
+        let count = services.ingest.rebuildSpotlightIndex(in: modelContext)
+        spotlightNotice = count == 1
+            ? "1 memory published to iPhone Search."
+            : "\(count) memories published to iPhone Search."
     }
 }
 

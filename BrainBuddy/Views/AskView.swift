@@ -1,8 +1,8 @@
 import SwiftData
 import SwiftUI
 
-/// Ask your brain a question — by typing or by talking — and get an answer read
-/// back out of your own notes.
+/// Ask your brain a question — by typing or by talking — and read the answer out
+/// of your own notes. Reading it *aloud* is a button, never automatic.
 @MainActor
 struct AskView: View {
     @Environment(AppServices.self) private var services
@@ -15,9 +15,14 @@ struct AskView: View {
     )
     private var memories: [MemoryItem]
 
-    @AppStorage(PreferenceKey.speakAnswers) private var speakAnswers = true
+    /// Off by default. See `AppServices.init` for why silence is the default.
+    @AppStorage(PreferenceKey.speakAnswers) private var speakAnswers = false
 
     @State private var query = ""
+    /// The question that produced what's on screen. Held separately from `query`
+    /// because the input box is emptied as soon as an answer arrives — you should
+    /// be able to ask the next thing without clearing the last one by hand.
+    @State private var askedQuestion = ""
     @State private var hits: [SearchHit] = []
     @State private var answer: AnswerComposer.Answer?
     @State private var isSearching = false
@@ -37,28 +42,13 @@ struct AskView: View {
             .navigationDestination(for: MemoryItem.self) { item in
                 MemoryDetailView(item: item)
             }
-            .onAppear {
-                transcriber.onFinalTranscript = { text in
-                    query = text
-                    runSearch(speak: true)
-                }
-            }
+            // A question can arrive from Siri before this view exists, so it is
+            // collected on appearance as well as on change.
+            .task { consumePendingQuestion() }
+            .onChange(of: services.pendingQuestion) { _, _ in consumePendingQuestion() }
             .onDisappear {
                 transcriber.cancelListening()
                 services.speaker.stop()
-            }
-            // Debounce typing so a long library isn't re-ranked on every keystroke.
-            .task(id: query) {
-                guard !transcriber.isListening else { return }
-                let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else {
-                    hits = []
-                    answer = nil
-                    return
-                }
-                try? await Task.sleep(nanoseconds: 280_000_000)
-                guard !Task.isCancelled else { return }
-                runSearch(speak: false)
             }
             .alert(
                 "Listening problem",
@@ -77,38 +67,43 @@ struct AskView: View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
+                    .font(.title3)
                     .foregroundStyle(.secondary)
 
+                // Questions are long — "what is my TSH value from the latest
+                // report" — so the field gets body-sized text and room to sit in.
                 TextField("Ask anything you've saved…", text: $query)
+                    .font(.body)
                     .focused($isFieldFocused)
                     .submitLabel(.search)
-                    .onSubmit { runSearch(speak: speakAnswers) }
+                    .onSubmit { ask(query) }
                     .disabled(transcriber.isListening)
 
                 if !query.isEmpty {
                     Button {
                         query = ""
-                        hits = []
-                        answer = nil
-                        services.speaker.stop()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
                             .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Clear what you typed")
                 }
 
                 Button(action: toggleListening) {
                     Image(systemName: transcriber.isListening ? "waveform.circle.fill" : "mic.circle.fill")
-                        .font(.title2)
+                        .font(.system(size: 34))
                         .symbolEffect(.pulse, isActive: transcriber.isListening)
                         .foregroundStyle(transcriber.isListening ? Color.red : Color.accentColor)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(transcriber.isListening ? "Stop listening" : "Ask by voice")
             }
-            .padding(12)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(minHeight: 58)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             if transcriber.isListening {
                 Text(transcriber.liveTranscript.isEmpty ? "Listening…" : transcriber.liveTranscript)
@@ -116,11 +111,35 @@ struct AskView: View {
                     .foregroundStyle(transcriber.liveTranscript.isEmpty ? .secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .transition(.opacity)
+            } else if !askedQuestion.isEmpty {
+                askedQuestionRow
             }
         }
         .padding(.horizontal)
         .padding(.bottom, 10)
         .animation(.easeInOut(duration: 0.2), value: transcriber.isListening)
+    }
+
+    /// What you asked, kept on screen because the box that held it is now empty.
+    private var askedQuestionRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "quote.opening")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Text(askedQuestion)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            Spacer(minLength: 4)
+            Button {
+                clearResults()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Clear this answer")
+        }
     }
 
     // MARK: - Results
@@ -130,13 +149,13 @@ struct AskView: View {
         if isSearching && hits.isEmpty {
             ProgressView("Searching your brain…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        } else if askedQuestion.isEmpty {
             suggestions
         } else if hits.isEmpty {
             EmptyStateView(
                 systemImage: "questionmark.bubble",
                 title: "Nothing found",
-                message: "Nothing in your brain matches “\(AnswerComposer.subject(of: query))” yet. Try different words, or capture it first."
+                message: "Nothing in your brain matches “\(AnswerComposer.subject(of: askedQuestion))” yet. Try different words, or capture it first."
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -158,26 +177,33 @@ struct AskView: View {
 
     private func answerCard(_ answer: AnswerComposer.Answer) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("Answer", systemImage: "sparkles")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
-                Spacer()
-                Button {
-                    if services.speaker.isSpeaking {
-                        services.speaker.stop()
-                    } else {
-                        services.speaker.speak(answer.spoken)
-                    }
-                } label: {
-                    Image(systemName: services.speaker.isSpeaking ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(services.speaker.isSpeaking ? "Stop speaking" : "Read answer aloud")
-            }
+            Label("Answer", systemImage: "sparkles")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+
             Text(answer.written)
                 .font(.body)
                 .textSelection(.enabled)
+
+            // Reading aloud is an action you take on an answer you can already
+            // see — not something that happens the moment results arrive.
+            Button {
+                if services.speaker.isSpeaking {
+                    services.speaker.stop()
+                } else {
+                    services.speaker.speak(answer.spoken)
+                }
+            } label: {
+                Label(
+                    services.speaker.isSpeaking ? "Stop" : "Read aloud",
+                    systemImage: services.speaker.isSpeaking ? "speaker.slash.fill" : "speaker.wave.2.fill"
+                )
+                .font(.footnote.weight(.medium))
+                .padding(.vertical, 7)
+                .padding(.horizontal, 12)
+                .background(Color(.secondarySystemBackground), in: Capsule())
+            }
+            .buttonStyle(.plain)
         }
         .padding(.vertical, 4)
     }
@@ -189,8 +215,7 @@ struct AskView: View {
                     .font(.headline)
                 ForEach(Self.samplePrompts, id: \.self) { prompt in
                     Button {
-                        query = prompt
-                        runSearch(speak: speakAnswers)
+                        ask(prompt)
                     } label: {
                         HStack {
                             Image(systemName: "quote.opening")
@@ -205,7 +230,7 @@ struct AskView: View {
                     .buttonStyle(.plain)
                 }
 
-                Text("Tap the microphone to ask out loud. Brain Buddy searches keywords *and* meaning, so you don't have to remember your exact wording.")
+                Text("Type a question and press search, or tap the microphone to ask out loud. Brain Buddy searches keywords *and* meaning, so you don't have to remember your exact wording. Answers stay silent until you tap Read aloud.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .padding(.top, 6)
@@ -231,8 +256,14 @@ struct AskView: View {
         }
         isFieldFocused = false
         query = ""
-        hits = []
-        answer = nil
+        clearResults()
+
+        // Assigned here rather than when the view appears: the capture editor
+        // dictates through the same recognizer, and whichever screen starts a
+        // session owns its result.
+        transcriber.onFinalTranscript = { text in ask(text) }
+        transcriber.onSessionEnd = nil
+
         Task {
             do {
                 try await transcriber.startListening()
@@ -242,11 +273,36 @@ struct AskView: View {
         }
     }
 
-    private func runSearch(speak: Bool) {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Runs a question handed over by Siri or the Shortcuts app, once.
+    private func consumePendingQuestion() {
+        guard let question = services.pendingQuestion else { return }
+        services.pendingQuestion = nil
+        ask(question)
+    }
+
+    private func clearResults() {
+        askedQuestion = ""
+        hits = []
+        answer = nil
+        services.speaker.stop()
+    }
+
+    /// Runs one question and empties the input box.
+    ///
+    /// Searching is explicit — on submit, on a voice result, or from a
+    /// suggestion — rather than debounced on every keystroke. Those two
+    /// behaviors are mutually exclusive: a box that empties itself when results
+    /// arrive can't also be searched as you type it.
+    private func ask(_ question: String) {
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
+        services.speaker.stop()
+        isFieldFocused = false
+        askedQuestion = trimmed
+        query = ""
         isSearching = true
+
         let results = services.search.search(query: trimmed, in: memories, limit: 30)
         hits = results
 
@@ -265,7 +321,8 @@ struct AskView: View {
         answer = composed
         isSearching = false
 
-        if speak && speakAnswers {
+        // Only when the user has explicitly turned automatic reading on.
+        if speakAnswers, composed.hasResults {
             services.speaker.speak(composed.spoken)
         }
     }

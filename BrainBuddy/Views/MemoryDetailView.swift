@@ -11,16 +11,27 @@ struct MemoryDetailView: View {
 
     @Bindable var item: MemoryItem
 
+    /// The whole library, used only to work out what this memory connects to.
+    /// Same query the other tabs run, so it costs a fetch that is already warm.
+    @Query(filter: #Predicate<MemoryItem> { !$0.isTrashed })
+    private var library: [MemoryItem]
+
+    @State private var connections: [RelatedMemory] = []
     @State private var isEditing = false
     @State private var newTag = ""
     @State private var showExtractedText = false
     @State private var pdfPreview: MemoryAttachment?
+    @State private var draftSummary: DiscussionSummarizer.Summary?
+    @State private var isSummarizing = false
+    @State private var summaryNotice: String?
 
     var body: some View {
         List {
             titleSection
+            summarySection
             if !item.sortedAttachments.isEmpty { attachmentSection }
             if !item.extractedText.isEmpty { extractedSection }
+            connectionSection
             tagSection
             metadataSection
             actionSection
@@ -35,6 +46,18 @@ struct MemoryDetailView: View {
                     isEditing.toggle()
                 }
             }
+        }
+        // Recomputed when you open a different memory, when this one is edited,
+        // and when the library grows — not on every redraw.
+        .task(id: connectionSignature) { await rebuildConnections() }
+        // Leaving mid-edit is a real thing people do: the text field has already
+        // written to the model, so tapping back without pressing Done would
+        // otherwise re-index nothing and leave the brief quoting the old
+        // wording.
+        .onDisappear {
+            guard isEditing else { return }
+            isEditing = false
+            commitEdits()
         }
         .sheet(item: $pdfPreview) { attachment in
             NavigationStack {
@@ -80,6 +103,73 @@ struct MemoryDetailView: View {
                     Text(item.text)
                         .textSelection(.enabled)
                 }
+            }
+        }
+    }
+
+    /// Only appears when there is something to summarize, or a summary already
+    /// saved — a two-line note has no business showing a Summary heading.
+    @ViewBuilder
+    private var summarySection: some View {
+        if item.hasSummary || canSummarize {
+            Section {
+                if let draftSummary {
+                    SummaryBody(summary: draftSummary)
+                    Button {
+                        save(draftSummary)
+                    } label: {
+                        Label("Save summary", systemImage: "tray.and.arrow.down")
+                    }
+                    Button("Discard draft") { self.draftSummary = nil }
+                } else {
+                    if item.hasSummary {
+                        Text(item.summary)
+                            .font(.callout)
+                            .textSelection(.enabled)
+
+                        if item.summaryIsAutomatic {
+                            Label(
+                                "Written automatically when this was captured",
+                                systemImage: "wand.and.stars"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                            Button {
+                                adoptSummary()
+                            } label: {
+                                Label("Use this in my brief", systemImage: "tray.and.arrow.down")
+                            }
+                        }
+                    }
+                    if canSummarize {
+                        Button {
+                            makeSummary()
+                        } label: {
+                            if isSummarizing {
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                    Text("Summarizing…")
+                                }
+                            } else {
+                                Label(
+                                    item.hasSummary ? "Summarize again" : "Create summary",
+                                    systemImage: "list.bullet.rectangle"
+                                )
+                            }
+                        }
+                        .disabled(isSummarizing)
+                    }
+                }
+                if let summaryNotice {
+                    Text(summaryNotice)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Summary")
+            } footer: {
+                Text("Every line is quoted from this memory's own words — nothing is generated. A saved summary is searchable, so you can find a long recording by the few things that mattered in it.")
             }
         }
     }
@@ -149,6 +239,39 @@ struct MemoryDetailView: View {
         }
     }
 
+    /// Memories this one belongs with, found without anybody linking anything.
+    ///
+    /// Absent when nothing clears the bar rather than padded with near-misses:
+    /// see `ConnectionFinder` for why a wrong link costs more than an empty
+    /// space.
+    @ViewBuilder
+    private var connectionSection: some View {
+        if !connections.isEmpty {
+            Section {
+                ForEach(connections) { related in
+                    NavigationLink(value: related.item) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(related.item.displayTitle)
+                                .font(.subheadline.weight(.medium))
+                                .lineLimit(2)
+                            HStack(spacing: 6) {
+                                Text(related.reason)
+                                    .foregroundStyle(Color.accentColor)
+                                Text(related.item.createdAt.filedDateDescription)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .font(.caption)
+                        }
+                    }
+                }
+            } header: {
+                Label("Connected in your brain", systemImage: "point.3.filled.connected.trianglepath.dotted")
+            } footer: {
+                Text("Found from shared tags, shared uncommon words and meaning — you don't have to link anything yourself.")
+            }
+        }
+    }
+
     private var actionSection: some View {
         Section {
             Toggle(isOn: Binding(
@@ -159,7 +282,7 @@ struct MemoryDetailView: View {
             }
 
             Button {
-                Task { await services.ingest.finalize(item, in: modelContext, activity: "Re-indexing") }
+                Task { await services.applyEdit(to: item, in: modelContext) }
             } label: {
                 Label("Rebuild search index", systemImage: "arrow.clockwise")
             }
@@ -187,12 +310,109 @@ struct MemoryDetailView: View {
         }
     }
 
+    // MARK: - Summarizing
+
+    /// A transcript, but also a long OCR'd scan or an imported PDF — anything
+    /// with enough words in it to be worth condensing.
+    private var summarizableText: String {
+        item.text.isEmpty ? item.extractedText : item.text
+    }
+
+    private var canSummarize: Bool {
+        summarizableText
+            .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+            .count >= DiscussionSummarizer.minimumWords
+    }
+
+    private func makeSummary() {
+        guard !isSummarizing else { return }
+        let body = summarizableText
+        isSummarizing = true
+        summaryNotice = nil
+        Task {
+            // Two `NLTagger` passes over a long document; keep it off the main actor.
+            let result = await Task.detached(priority: .userInitiated) {
+                DiscussionSummarizer.summarize(body)
+            }.value
+            isSummarizing = false
+            if let result {
+                draftSummary = result
+            } else {
+                summaryNotice = "There isn't enough distinct material here to summarize."
+            }
+        }
+    }
+
+    /// Promotes the app's own summary to one you stand behind.
+    ///
+    /// Until this is pressed, an automatic summary is on the same footing as the
+    /// OCR it came from: readable, searchable, and kept out of your brief —
+    /// because nobody agreed to it.
+    private func adoptSummary() {
+        item.summaryIsAutomatic = false
+        item.touch()
+        summaryNotice = "Saved. Anything in it can now reach your brief."
+        Task { await services.applyEdit(to: item, in: modelContext) }
+    }
+
+    private func save(_ summary: DiscussionSummarizer.Summary) {
+        let text = summary.text
+        draftSummary = nil
+        Task {
+            await services.ingest.setSummary(text, on: item, in: modelContext)
+            // A saved summary is where this memory's follow-ups now come from,
+            // so any brief line quoted from its raw transcript is out of date.
+            services.brief.resync(item, in: modelContext)
+            await services.refreshReminders(in: modelContext)
+        }
+    }
+
+    // MARK: - Connections
+
+    private var connectionSignature: String {
+        "\(item.identifier)-\(library.count)-\(Int(item.updatedAt.timeIntervalSince1970))"
+    }
+
+    /// Snapshots to plain values on the main actor, then scores off it.
+    ///
+    /// Cosine similarity across a whole library is real arithmetic, and
+    /// `MemoryItem` is not `Sendable`, so the model never crosses the boundary —
+    /// only the flattened candidates do, and only identifiers come back.
+    private func rebuildConnections() async {
+        let subject = ConnectionCandidate(item)
+        let candidates = library.map(ConnectionCandidate.init)
+        guard candidates.count > 1 else {
+            connections = []
+            return
+        }
+
+        let found = await Task.detached(priority: .utility) {
+            ConnectionFinder.related(to: subject, among: candidates)
+        }.value
+
+        let byIdentifier = Dictionary(
+            library.map { ($0.identifier, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        connections = found.compactMap { connection in
+            guard let match = byIdentifier[connection.id] else { return nil }
+            return RelatedMemory(item: match, reason: connection.reason)
+        }
+    }
+
     // MARK: - Actions
 
     /// Editing text changes what the note means, so the index is rebuilt rather
     /// than left pointing at the old wording.
     private func commitEdits() {
-        Task { await services.ingest.finalize(item, in: modelContext, activity: "Re-indexing") }
+        // From here on this title is the user's, and bulk re-derivation leaves
+        // it alone.
+        if !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            item.hasCustomTitle = true
+        }
+        // Not just the search index: the brief quotes this note, and a quote of
+        // text you have just corrected has to be corrected with it.
+        Task { await services.applyEdit(to: item, in: modelContext) }
     }
 
     private func addTag() {
@@ -207,13 +427,19 @@ struct MemoryDetailView: View {
     }
 }
 
+/// A found link, ready to render.
+private struct RelatedMemory: Identifiable {
+    let item: MemoryItem
+    let reason: String
+
+    var id: UUID { item.identifier }
+}
+
 /// Renders one attachment inline: images preview, audio plays, PDFs open.
 @MainActor
 private struct AttachmentCell: View {
     let attachment: MemoryAttachment
     var onTap: () -> Void
-
-    @State private var player = AudioPlayerController()
 
     var body: some View {
         switch attachment.kind {
@@ -244,32 +470,7 @@ private struct AttachmentCell: View {
     }
 
     private var audioCell: some View {
-        HStack(spacing: 12) {
-            Button {
-                if player.duration == 0, let url = attachment.temporaryFileURL() {
-                    player.load(url: url)
-                }
-                player.togglePlayback()
-            } label: {
-                Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 34))
-            }
-            .buttonStyle(.plain)
-            .disabled(attachment.payload == nil)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(attachment.filename)
-                    .font(.subheadline)
-                    .lineLimit(1)
-                Text(player.duration > 0
-                     ? "\(format(player.currentTime)) / \(format(player.duration))"
-                     : attachment.formattedDuration)
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
+        AudioPlayerRow(attachment: attachment)
     }
 
     private var fileCell: some View {
@@ -324,11 +525,6 @@ private struct AttachmentCell: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-    }
-
-    private func format(_ time: TimeInterval) -> String {
-        let total = Int(time)
-        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }
 
