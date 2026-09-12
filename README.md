@@ -120,6 +120,26 @@ so `12:05` in anything at all reads as an appointment today. A time only counts 
 the match names a day too — a weekday, a month, `29/07/2026`, "tomorrow" — or if
 the note itself was written today, where "call at 4" plainly means this afternoon.
 
+**Today is a board of cards, not a list.** Twenty rows with a quoted paragraph
+under each one is a wall — you cannot see the shape of your day in it. Each
+group is now a card with a coloured tile, a count, five rows and a **+N more**,
+and the quote moves where quotes belong: inside the note, when you go looking
+for it.
+
+| Card | What lands on it |
+| --- | --- |
+| **Top priorities** | What's happening today, and anything open three days or more. Three days is the point where "I'll get to it" has been said twice; listing that politely among thirty others is not helping. |
+| **To-do** | Everything else still owed. |
+| **Calls & emails** | Lines that are really "get in touch with somebody" — they need an explicit *email*, *call*, *reply*. Plain "send" isn't enough: *"Galvanisation previous reading, send it to Pandi"* is a job with a hand-off at the end, not a call. |
+| **Worth knowing** | Key points. Nothing to do. |
+| **Done today** | Closed today, shut by default — a record of work, not a list of it, and it should never push today's own cards down. |
+
+Each line lands on **exactly one** card, decided once in that order: age outranks
+the medium, so an email you should have sent four days ago is a priority rather
+than something filed politely under calls. Rows carry a small right-hand chip
+with the time it happens or how long it has waited — both answer *how urgent is
+this* in three characters.
+
 Every line has a circle you tap to **close** it, or leave open. Closing survives
 relaunching and syncs to your other devices, because a brief you can't tick off
 is just a search result. Swipe for the same thing, plus *Remove* for a line that
@@ -577,7 +597,8 @@ blob round-trip, hybrid ranking behavior, answer phrasing, link-vs-note
 detection and link titling, summarizer behavior (including the property that
 matters most — every summary line is quoted verbatim from the transcript), what
 lands in a morning brief and what's correctly left out of it, the stored-summary
-round trip the brief depends on, recognising a capture that has arrived before,
+round trip the brief depends on, which of Today's cards a line lands on,
+recognising a capture that has arrived before,
 the one-line-per-memory rule and the clean-up that applies it to briefs built
 without it, what a summarizer does with a bulleted document and how it avoids
 saying the same thing twice, the reconciliation that rewords a brief line
@@ -619,7 +640,8 @@ BrainBuddy/
                 QuickCaptureQueue (Siri hand-off), SpotlightIndexer (iPhone Search),
                 ConnectionFinder (automatic links), ReviewBuilder (the review),
                 BrainClassifier (which region a memory lands in), PeriodFilter,
-                CaptureFingerprint (the same thing, saved twice)
+                CaptureFingerprint (the same thing, saved twice),
+                BriefGrouping (which card a brief line belongs on)
   Views/        RootView, TodayView, ReviewView, CaptureView (Input),
                 VoiceCaptureView, BrainView (the 3D brain) + TrashView,
                 MemoryDetailView, AskView, SettingsView,

@@ -1,11 +1,16 @@
 import SwiftData
 import SwiftUI
 
-/// This morning's brief: what's on today, what you said you'd do, and the points
-/// worth having in mind — each one closable.
+/// This morning's brief, as a handful of cards.
 ///
-/// Everything here was already in your brain. The brief doesn't add knowledge, it
-/// just puts today's slice of it in front of you at the hour you asked for.
+/// It was one flat list with a quoted paragraph under every row, and at twenty
+/// lines that is a wall rather than a plan — you cannot see the shape of your
+/// day in it. Now each group is a card with a coloured tile, a count and five
+/// rows, and everything past that is one tap behind **+N more**. The quote moves
+/// where quotes belong: inside the note, when you go looking for it.
+///
+/// Everything here was already in your brain. The brief doesn't add knowledge,
+/// it just puts today's slice of it in front of you at the hour you asked for.
 @MainActor
 struct TodayView: View {
     @Environment(AppServices.self) private var services
@@ -16,11 +21,11 @@ struct TodayView: View {
     @Query private var entries: [BriefEntry]
 
     /// Used only to resolve the "open the note this came from" links. Same
-    /// whole-library query the Ask and Library tabs already use.
+    /// whole-library query the Ask and Brain tabs already use.
     @Query(filter: #Predicate<MemoryItem> { !$0.isTrashed })
     private var memories: [MemoryItem]
 
-    @State private var showClosed = false
+    @State private var expanded: Set<BriefGroupKind> = []
     @State private var isRefreshing = false
     @State private var refreshNotice: String?
     @State private var noticeDismissal: Task<Void, Never>?
@@ -47,7 +52,7 @@ struct TodayView: View {
                 if isEmpty {
                     emptyState
                 } else {
-                    briefList
+                    board
                 }
             }
             .navigationTitle("Today")
@@ -78,64 +83,33 @@ struct TodayView: View {
         }
     }
 
-    // MARK: - Content
+    // MARK: - The board
 
-    private var briefList: some View {
+    private var board: some View {
         // Resolved once per body pass. A per-row fetch would run on every render
         // of every line, which is the kind of thing that makes a list stutter.
         let sources = sourceLookup()
+        let grouped = groupedEntries()
 
-        return List {
-            headerSection
+        return ScrollView {
+            LazyVStack(spacing: 16) {
+                header
 
-            ForEach(BriefEntryKind.allCases) { kind in
-                let lines = todayEntries.filter { $0.kind == kind }
-                if !lines.isEmpty {
-                    Section {
-                        ForEach(lines) { entry in
-                            row(entry, source: source(of: entry, in: sources))
-                        }
-                    } header: {
-                        Label(kind.title, systemImage: kind.systemImage)
+                ForEach(BriefGroupKind.display) { group in
+                    if let lines = grouped[group], !lines.isEmpty {
+                        card(group, lines: lines, sources: sources)
                     }
                 }
             }
-
-            if !carriedOver.isEmpty {
-                Section {
-                    ForEach(carriedOver) { entry in
-                        row(entry, source: source(of: entry, in: sources), showDay: true)
-                    }
-                } header: {
-                    Label("Still open from before", systemImage: "clock.arrow.circlepath")
-                } footer: {
-                    Text("Left open on an earlier day. Close it here and it stops following you around.")
-                }
-            }
-
-            if !completed.isEmpty {
-                Section {
-                    if showClosed {
-                        ForEach(completed) { entry in
-                            row(entry, source: source(of: entry, in: sources))
-                        }
-                    }
-                } header: {
-                    completedHeader
-                } footer: {
-                    if showClosed {
-                        Text("Tap a line to reopen it if you ticked it off too early.")
-                    }
-                }
-            }
+            .padding(.horizontal)
+            .padding(.bottom, 24)
         }
-        .listStyle(.insetGrouped)
     }
 
-    private var headerSection: some View {
-        Section {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(Date().formatted(.dateTime.weekday(.wide).month(.wide).day()))
                         .font(.title3.weight(.semibold))
                     Text(refreshNotice ?? progressLine)
@@ -145,49 +119,119 @@ struct TodayView: View {
 
                 Spacer(minLength: 8)
 
-                // In the header rather than buried in a menu: anything captured
-                // later in the day only appears once the brief is rebuilt, so
-                // this is the one control on this screen people reach for.
+                // Anything captured later in the day only appears once the brief
+                // is rebuilt, so this is the one control people reach for here.
                 Button {
                     refresh()
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                         .font(.footnote.weight(.medium))
-                        .labelStyle(.titleAndIcon)
                 }
                 .buttonStyle(.bordered)
                 .disabled(isRefreshing)
             }
-            .padding(.vertical, 2)
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    /// Doubles as the disclosure control for the section, so completed work is
-    /// visible as a count without taking up the screen — and one tap away when
-    /// you want to check or undo something.
-    private var completedHeader: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) { showClosed.toggle() }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "checkmark.circle")
-                Text("Completed today")
-                Text("\(completed.count)")
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 4)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .rotationEffect(.degrees(showClosed ? 90 : 0))
+    /// One group: a coloured tile, a count, and its rows.
+    private func card(
+        _ group: BriefGroupKind,
+        lines: [BriefEntry],
+        sources: [UUID: MemoryItem]
+    ) -> some View {
+        let isOpen = expanded.contains(group)
+
+        // "Done today" stays shut however few there are: it's a record of work,
+        // not a list of it, and it should never push today's own cards down.
+        let visible: [BriefEntry]
+        if group == .done {
+            visible = isOpen ? lines : []
+        } else {
+            visible = isOpen ? lines : Array(lines.prefix(BriefGrouping.collapsedRowLimit))
+        }
+        let hidden = lines.count - visible.count
+
+        return VStack(spacing: 0) {
+            cardHeader(group, count: lines.count, isOpen: isOpen)
+
+            ForEach(Array(visible.enumerated()), id: \.element.identifier) { index, entry in
+                if index > 0 {
+                    Divider().padding(.leading, 52)
+                }
+                row(entry, source: source(of: entry, in: sources))
             }
-            .font(.subheadline)
+
+            if hidden > 0 {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { expanded.insert(group) }
+                } label: {
+                    Text(group == .done ? "Show \(hidden)" : "+\(hidden) more")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if isOpen {
+                Text(group.caption)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+            }
+        }
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func cardHeader(_ group: BriefGroupKind, count: Int, isOpen: Bool) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                if isOpen { expanded.remove(group) } else { expanded.insert(group) }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(group.tint)
+                    .frame(width: 36, height: 36)
+                    .overlay {
+                        Image(systemName: group.systemImage)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+
+                Text(group.title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                Text("\(count)")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+
+                Spacer(minLength: 4)
+
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(isOpen ? 90 : 0))
+            }
+            .padding(16)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .textCase(nil)
-        .accessibilityLabel(showClosed ? "Hide completed" : "Show completed")
+        .accessibilityLabel("\(group.title), \(count)")
     }
 
-    private func row(_ entry: BriefEntry, source: MemoryItem?, showDay: Bool = false) -> some View {
+    /// One line: tick it off on the left, read it in the middle, open the note
+    /// it came from by tapping the text.
+    private func row(_ entry: BriefEntry, source: MemoryItem?) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Button {
                 close(entry)
@@ -199,68 +243,34 @@ struct TodayView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(entry.isClosed ? "Reopen" : "Close")
 
-            VStack(alignment: .leading, spacing: 4) {
-                // A short subject leads, so the brief can be read in a glance.
-                Text(entry.subject)
-                    .font(.callout.weight(entry.headline.isEmpty ? .regular : .medium))
-                    .strikethrough(entry.isClosed, color: .secondary)
-                    .foregroundStyle(entry.isClosed ? .secondary : .primary)
-
-                // The exact words, kept underneath, because the subject is derived
-                // and the quote is what was actually said.
-                if let supporting = entry.supportingText {
-                    Text(supporting)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-
-                HStack(spacing: 6) {
-                    if let time = entry.scheduledTimeLabel {
-                        Text(time)
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(Color.accentColor)
-                    }
-                    if showDay {
-                        Text(entry.day.formatted(.dateTime.month(.abbreviated).day()))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    if !entry.detail.isEmpty {
-                        Text(entry.detail)
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                    }
+            Group {
+                if let source {
+                    NavigationLink(value: source) { rowText(entry) }
+                        .buttonStyle(.plain)
+                } else {
+                    rowText(entry)
                 }
             }
 
-            Spacer(minLength: 0)
-
-            // Only the chevron navigates: the rest of the row belongs to the
-            // close button, and a whole-row link would swallow those taps.
-            if let source {
-                // A quote mark rather than a chevron: a link inside a list row
-                // already gets the system's own disclosure arrow, and two
-                // chevrons in a row read as a bug — which is how this looked.
-                NavigationLink(value: source) {
-                    Image(systemName: "text.quote")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-                .fixedSize()
-                .accessibilityLabel("Open the note this came from")
+            if let badge = BriefGrouping.badge(
+                scheduledAt: entry.scheduledAt,
+                day: entry.day,
+                today: today
+            ) {
+                Text(badge)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(entry.scheduledAt == nil ? .secondary : Color.accentColor)
+                    .fixedSize(horizontal: true, vertical: false)
             }
         }
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
+        .contextMenu {
             Button {
                 close(entry)
             } label: {
                 Label(entry.isClosed ? "Reopen" : "Close", systemImage: entry.isClosed ? "arrow.uturn.backward" : "checkmark")
             }
-            .tint(entry.isClosed ? .orange : .green)
-
             Button(role: .destructive) {
                 services.brief.remove(entry, in: modelContext)
                 rescheduleReminders()
@@ -268,6 +278,19 @@ struct TodayView: View {
                 Label("Remove", systemImage: "trash")
             }
         }
+    }
+
+    /// The subject only. The full quote lives in the note — printing it here is
+    /// what made twenty lines unreadable.
+    private func rowText(_ entry: BriefEntry) -> some View {
+        Text(entry.subject)
+            .font(.callout)
+            .strikethrough(entry.isClosed, color: .secondary)
+            .foregroundStyle(entry.isClosed ? .secondary : .primary)
+            .lineLimit(2)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
     }
 
     private var emptyState: some View {
@@ -281,38 +304,63 @@ struct TodayView: View {
 
     // MARK: - Slices
 
-    private var todayEntries: [BriefEntry] {
-        entries.filter { Calendar.current.isDate($0.day, inSameDayAs: today) && !$0.isClosed }
-    }
+    /// Every line, on exactly one card. See `BriefGrouping` for the order the
+    /// cards claim them in.
+    private func groupedEntries() -> [BriefGroupKind: [BriefEntry]] {
+        var grouped: [BriefGroupKind: [BriefEntry]] = [:]
 
-    /// Keyed on when it was closed rather than which day's brief it belonged to.
-    /// A line carried over from last week and ticked off this morning was
-    /// completed *today*, and filtering by `day` made it disappear with no way
-    /// to reopen it.
-    private var completed: [BriefEntry] {
-        entries
-            .filter { entry in
-                guard entry.isClosed, let closedAt = entry.closedAt else { return false }
-                return Calendar.current.isDate(closedAt, inSameDayAs: today)
+        for entry in entries {
+            guard let group = BriefGrouping.group(
+                kind: entry.kind,
+                day: entry.day,
+                isClosed: entry.isClosed,
+                closedAt: entry.closedAt,
+                text: entry.subject,
+                today: today
+            ) else { continue }
+            grouped[group, default: []].append(entry)
+        }
+
+        // Snapshotted: mutating the dictionary while iterating its own keys view
+        // is an exclusivity violation waiting for a big enough brief.
+        for group in Array(grouped.keys) {
+            grouped[group]?.sort { lhs, rhs in
+                switch group {
+                case .priorities:
+                    // What's happening today first, in the order it happens;
+                    // then whatever has been waiting longest.
+                    if let left = lhs.scheduledAt, let right = rhs.scheduledAt { return left < right }
+                    if lhs.scheduledAt != nil { return true }
+                    if rhs.scheduledAt != nil { return false }
+                    return lhs.day < rhs.day
+                case .done:
+                    return (lhs.closedAt ?? .distantPast) > (rhs.closedAt ?? .distantPast)
+                default:
+                    // Oldest first everywhere else: a thing you wrote down three
+                    // days ago should not sink under this morning's.
+                    return lhs.day == rhs.day ? lhs.sortIndex < rhs.sortIndex : lhs.day < rhs.day
+                }
             }
-            .sorted { ($0.closedAt ?? .distantPast) > ($1.closedAt ?? .distantPast) }
+        }
+        return grouped
     }
 
-    /// Open lines from earlier days. A task doesn't stop mattering at midnight, so
-    /// it follows you forward instead of quietly disappearing from yesterday.
-    private var carriedOver: [BriefEntry] {
-        entries
-            .filter { !$0.isClosed && $0.day < today }
-            .sorted { $0.day > $1.day }
+    private var openCount: Int {
+        entries.filter { !$0.isClosed }.count
     }
 
-    private var isEmpty: Bool {
-        todayEntries.isEmpty && carriedOver.isEmpty && completed.isEmpty
+    private var closedTodayCount: Int {
+        entries.filter { entry in
+            guard entry.isClosed, let closedAt = entry.closedAt else { return false }
+            return Calendar.current.isDate(closedAt, inSameDayAs: today)
+        }.count
     }
+
+    private var isEmpty: Bool { openCount == 0 && closedTodayCount == 0 }
 
     private var progressLine: String {
-        let open = todayEntries.count + carriedOver.count
-        let closed = completed.count
+        let open = openCount
+        let closed = closedTodayCount
         if open == 0 && closed > 0 { return "All clear — \(closed) closed today." }
         if open == 0 { return "Nothing open." }
 
@@ -346,7 +394,9 @@ struct TodayView: View {
     }
 
     private func close(_ entry: BriefEntry) {
-        services.brief.toggle(entry, in: modelContext)
+        withAnimation(.easeInOut(duration: 0.2)) {
+            services.brief.toggle(entry, in: modelContext)
+        }
         rescheduleReminders()
     }
 
