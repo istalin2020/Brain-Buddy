@@ -30,6 +30,17 @@ struct TodayView: View {
     @State private var refreshNotice: String?
     @State private var noticeDismissal: Task<Void, Never>?
 
+    /// The card's fill and shape, named once.
+    ///
+    /// `Color(.secondarySystemBackground)` asks the compiler to infer whether
+    /// that leading dot is a `UIColor` member or a `ShapeStyle` one, and inside
+    /// a builder as large as `card(_:lines:sources:)` it gives up — "Ambiguous
+    /// use of background(_:in:fillStyle:)". Naming the initializer settles it,
+    /// and hoisting both out of the builder keeps the expression the type
+    /// checker has to solve small.
+    private static let cardFill = Color(uiColor: .secondarySystemBackground)
+    private static let cardShape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+
     /// Recomputed rather than stored, so a session left open overnight rolls onto
     /// the new day instead of showing yesterday as "today".
     private var today: Date { Calendar.current.startOfDay(for: Date()) }
@@ -133,7 +144,7 @@ struct TodayView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Self.cardFill, in: Self.cardShape)
     }
 
     /// One group: a coloured tile, a count, and its rows.
@@ -187,7 +198,7 @@ struct TodayView: View {
                     .padding(.bottom, 12)
             }
         }
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Self.cardFill, in: Self.cardShape)
     }
 
     private func cardHeader(_ group: BriefGroupKind, count: Int, isOpen: Bool) -> some View {
