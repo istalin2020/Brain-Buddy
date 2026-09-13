@@ -30,14 +30,15 @@ struct TodayView: View {
     @State private var refreshNotice: String?
     @State private var noticeDismissal: Task<Void, Never>?
 
-    /// The card's fill and shape, named once.
+    /// What a card looks like, named once.
     ///
-    /// `Color(.secondarySystemBackground)` asks the compiler to infer whether
-    /// that leading dot is a `UIColor` member or a `ShapeStyle` one, and inside
-    /// a builder as large as `card(_:lines:sources:)` it gives up — "Ambiguous
-    /// use of background(_:in:fillStyle:)". Naming the initializer settles it,
-    /// and hoisting both out of the builder keeps the expression the type
-    /// checker has to solve small.
+    /// Both are spelled out rather than inferred — `Color(uiColor:)` rather than
+    /// `Color(.secondarySystemBackground)`, which would leave the compiler to
+    /// work out whether that leading dot is a `UIColor` member or a `ShapeStyle`
+    /// one. They are applied with `background { shape.fill(colour) }` rather
+    /// than `background(_:in:)`, because the style-and-shape overload is one of
+    /// several and picking between them is exactly the work that fails first
+    /// when a builder gets long.
     private static let cardFill = Color(uiColor: .secondarySystemBackground)
     private static let cardShape = RoundedRectangle(cornerRadius: 16, style: .continuous)
 
@@ -144,61 +145,89 @@ struct TodayView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Self.cardFill, in: Self.cardShape)
+        .background { Self.cardShape.fill(Self.cardFill) }
     }
 
     /// One group: a coloured tile, a count, and its rows.
+    ///
+    /// Deliberately four short calls rather than one long builder. The long
+    /// version — a header, a `ForEach` over enumerated rows with a conditional
+    /// divider inside it, and two more conditionals after it — is more than the
+    /// type checker will solve in one go, and what it reports when it gives up
+    /// is "Ambiguous use of background(_:in:fillStyle:)" on the last line, which
+    /// points at the one part that was never the problem.
     private func card(
         _ group: BriefGroupKind,
         lines: [BriefEntry],
         sources: [UUID: MemoryItem]
     ) -> some View {
         let isOpen = expanded.contains(group)
-
-        // "Done today" stays shut however few there are: it's a record of work,
-        // not a list of it, and it should never push today's own cards down.
-        let visible: [BriefEntry]
-        if group == .done {
-            visible = isOpen ? lines : []
-        } else {
-            visible = isOpen ? lines : Array(lines.prefix(BriefGrouping.collapsedRowLimit))
-        }
+        let visible = visibleLines(group, lines: lines, isOpen: isOpen)
         let hidden = lines.count - visible.count
 
         return VStack(spacing: 0) {
             cardHeader(group, count: lines.count, isOpen: isOpen)
+            cardRows(visible, sources: sources)
+            moreButton(group, hidden: hidden)
+            caption(group, isOpen: isOpen)
+        }
+        .background { Self.cardShape.fill(Self.cardFill) }
+    }
 
-            ForEach(Array(visible.enumerated()), id: \.element.identifier) { index, entry in
-                if index > 0 {
+    /// "Done today" stays shut however few there are: it's a record of work, not
+    /// a list of it, and it should never push today's own cards down.
+    private func visibleLines(
+        _ group: BriefGroupKind,
+        lines: [BriefEntry],
+        isOpen: Bool
+    ) -> [BriefEntry] {
+        if group == .done { return isOpen ? lines : [] }
+        return isOpen ? lines : Array(lines.prefix(BriefGrouping.collapsedRowLimit))
+    }
+
+    @ViewBuilder
+    private func cardRows(_ lines: [BriefEntry], sources: [UUID: MemoryItem]) -> some View {
+        // `pair` rather than destructuring into `(index, entry)`: one less thing
+        // for the checker to infer inside a builder.
+        ForEach(Array(lines.enumerated()), id: \.element.identifier) { pair in
+            VStack(spacing: 0) {
+                if pair.offset > 0 {
                     Divider().padding(.leading, 52)
                 }
-                row(entry, source: source(of: entry, in: sources))
-            }
-
-            if hidden > 0 {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { expanded.insert(group) }
-                } label: {
-                    Text(group == .done ? "Show \(hidden)" : "+\(hidden) more")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                }
-                .buttonStyle(.plain)
-            }
-
-            if isOpen {
-                Text(group.caption)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
+                row(pair.element, source: source(of: pair.element, in: sources))
             }
         }
-        .background(Self.cardFill, in: Self.cardShape)
+    }
+
+    @ViewBuilder
+    private func moreButton(_ group: BriefGroupKind, hidden: Int) -> some View {
+        if hidden > 0 {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { expanded.insert(group) }
+            } label: {
+                Text(group == .done ? "Show \(hidden)" : "+\(hidden) more")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// Why these lines are together. Only while the card is open, so the closed
+    /// state stays clean.
+    @ViewBuilder
+    private func caption(_ group: BriefGroupKind, isOpen: Bool) -> some View {
+        if isOpen {
+            Text(group.caption)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+        }
     }
 
     private func cardHeader(_ group: BriefGroupKind, count: Int, isOpen: Bool) -> some View {
