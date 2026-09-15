@@ -214,3 +214,43 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(engine.rank(query: "garlic", documents: added).count, 2)
     }
 }
+
+/// The lines a reply walks through, not just the one that answers.
+final class RelevantLinesTests: XCTestCase {
+    private let note = """
+    Site meeting with PCH on Tuesday.
+    The insulator damage on tower 42 was raised again.
+    Lunch was late.
+    Insulator damage: 14 units, replacement quoted at 1,250 OMR.
+    Stringing on that stretch is on hold until the insulators are replaced.
+    """
+
+    func testEveryLineThatBearsOnTheQuestionIsReturnedInReadingOrder() {
+        let lines = SearchEngine.relevantLines(for: Tokenizer.queryTokens(in: "insulator damage"), in: note)
+        XCTAssertEqual(lines.count, 3, "got \(lines)")
+        XCTAssertTrue(lines[0].contains("raised again"))
+        XCTAssertTrue(lines[1].contains("1,250 OMR"))
+        XCTAssertTrue(lines[2].contains("Stringing"))
+        XCTAssertFalse(lines.contains { $0.contains("Lunch") })
+    }
+
+    func testTheLimitHolds() {
+        let lines = SearchEngine.relevantLines(for: Tokenizer.queryTokens(in: "insulator"), in: note, limit: 1)
+        XCTAssertEqual(lines.count, 1)
+    }
+
+    /// Documents repeat themselves; a reply should not.
+    func testARestatementIsNotQuotedTwice() {
+        let repetitive = """
+        Your jury round is scheduled.
+        Your AI Hackathon jury round is scheduled for Wednesday.
+        Bring your own laptop.
+        """
+        let lines = SearchEngine.relevantLines(for: Tokenizer.queryTokens(in: "jury round"), in: repetitive)
+        XCTAssertEqual(lines.count, 1, "got \(lines)")
+    }
+
+    func testNothingRelevantMeansNothing() {
+        XCTAssertTrue(SearchEngine.relevantLines(for: ["helicopter"], in: note).isEmpty)
+    }
+}

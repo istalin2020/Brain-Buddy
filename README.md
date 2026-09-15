@@ -553,21 +553,50 @@ Words like *latest*, *recent* and *most* are stripped from questions along with
 the rest of the conversational filler: they say which result you want, not what
 it's about, and ranking already applies a recency boost.
 
-Tap the microphone and the same pipeline runs on live dictation. The composed
-answer is **extractive** — it quotes what you actually stored, with a "from your
-note yesterday…" preamble. It never generates prose, so it can't tell you
-something your notes don't say.
+**It's a conversation.** Ask is laid out the way every assistant people
+already use is laid out: the box is at the bottom, tapping into it lifts the
+keyboard and the box with it, and the suggestions rise with them — two stock
+questions and then questions about what you saved most recently, because a
+suggestion that names your own note is one you can tap without thinking. Your
+question goes up as a message, *Looking through your brain…* shows for a
+moment, and the reply lands under it. One button on the right does three
+jobs: the microphone when the box is empty, **Send** once you've typed, and
+**Stop** while it's listening (the live transcript shows in the box as you
+speak). *New conversation* in the toolbar clears the thread.
 
-**Answers are silent.** They appear as text, and a **Read aloud** button hands
-that text to `AVSpeechSynthesizer` when *you* ask for it. An app that starts
-talking the moment you look something up is unusable in a meeting, on a train, or
-next to someone asleep. Settings can flip it back to speaking automatically.
+**The reply talks you through what it found.** *"Here's what I have on the
+insulator damage — 3 things in your brain mention it. Going through them:"*
+and then one passage per source — the note's name, what kind of thing it is
+and when it was saved, and **every line in it that bears on the question**,
+not just the best one: the row above the value, the sentence with the date,
+the one that says who agreed to what. After the passages, **Worth noting**
+lists the concrete details somebody would otherwise have to fish out — amounts
+as written (*60,000 Omani rial*), dates, times, phone numbers, and a number
+sitting next to a word you asked about (*TSH 5.46*). Then the close: how many
+more notes mention it, and to tap a source to open the whole thing.
 
-Asking also empties the question box, so the next question doesn't need the last
-one cleared out by hand — the question you asked stays on screen above the answer.
-That makes search explicit (press return, tap the mic, tap a suggestion) rather
-than debounced on every keystroke; a box that clears itself can't also be
-searched as you type it.
+Every sentence of substance in that reply is **quoted**. The voice is
+generated — the "here's what I have", the "going through them" — and the facts
+are your own words, lifted whole. That is not a limitation dressed up as a
+feature: an assistant that paraphrases your notes can tell you the invoice was
+54,000 when the note says 60,000, and you would have no way of knowing. So
+under every reply sit its **sources** — the note, photo, PDF or recording it
+was built from, with what it is, when it was filed, and why it matched — and
+tapping one opens the original. Everything that matched is listed, not only
+what the reply quoted; the sixth match may be the one you were thinking of.
+
+Tap the microphone and the same pipeline runs on live dictation.
+
+**Replies are silent.** They appear as text, and a **Read aloud** button under
+each hands it to `AVSpeechSynthesizer` when *you* ask for it. An app that
+starts talking the moment you look something up is unusable in a meeting, on a
+train, or next to someone asleep. Settings can flip it back to speaking
+automatically.
+
+Sending empties the box, so the next question doesn't need the last one
+cleared out by hand. That makes search explicit (send, the mic, a suggestion)
+rather than debounced on every keystroke; a box that clears itself can't also
+be searched as you type it.
 
 ### iCloud sync
 

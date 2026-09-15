@@ -29,17 +29,94 @@ final class AnswerComposerTests: XCTestCase {
         XCTAssertTrue(answer.hasResults)
         XCTAssertTrue(answer.written.contains("Tuesday at four with Dr Alvarez"))
         XCTAssertTrue(answer.written.contains("today"))
+        XCTAssertTrue(answer.written.contains("Dentist appointment"), "the source is named")
     }
 
-    func testAdditionalMatchesAreCounted() {
-        let answer = AnswerComposer.compose(query: "dentist", sources: [source(), source(), source()])
-        XCTAssertTrue(answer.written.contains("2 other items also match"))
+    /// The reply goes through every source, not just the best one.
+    func testEverySourceGetsAPassage() {
+        let answer = AnswerComposer.compose(
+            query: "dentist",
+            sources: [
+                source(title: "Dentist appointment"),
+                source(title: "Insurance card", snippet: "Policy covers two check-ups a year"),
+                source(title: "Dr Alvarez", snippet: "Parking is behind the clinic")
+            ]
+        )
+        XCTAssertTrue(answer.written.contains("3 things in your brain mention it"))
+        XCTAssertTrue(answer.written.contains("Insurance card"))
+        XCTAssertTrue(answer.written.contains("Policy covers two check-ups a year"))
+        XCTAssertTrue(answer.written.contains("Parking is behind the clinic"))
+        XCTAssertEqual(answer.references.count, 3)
+    }
+
+    /// Every line that bears on the question, not only the one that answers it.
+    func testAllRelevantLinesAreQuoted() {
+        let lines = [
+            "Dentist on Tuesday at four",
+            "Bring the insurance card",
+            "Ask about the crown on the lower left"
+        ]
+        let answer = AnswerComposer.compose(
+            query: "dentist",
+            sources: [AnswerSource(title: "Dentist", snippet: lines[0], lines: lines, createdAt: Date(), kindTitle: "Note", score: 1)]
+        )
+        for line in lines {
+            XCTAssertTrue(answer.written.contains(line), "missing “\(line)”")
+        }
+    }
+
+    func testMatchesBeyondThoseQuotedAreCounted() {
+        let answer = AnswerComposer.compose(query: "dentist", sources: [source(), source()], totalMatches: 4)
+        XCTAssertTrue(answer.written.contains("2 more notes mention it too"))
+        XCTAssertTrue(answer.spoken.contains("2 more notes mention it"))
     }
 
     func testSingleExtraMatchUsesSingularWording() {
-        let answer = AnswerComposer.compose(query: "dentist", sources: [source(), source()])
-        XCTAssertTrue(answer.written.contains("1 other item also matches"))
-        XCTAssertTrue(answer.spoken.contains("1 more match"))
+        let answer = AnswerComposer.compose(query: "dentist", sources: [source()], totalMatches: 2)
+        XCTAssertTrue(answer.written.contains("1 more note mentions it too"))
+        XCTAssertTrue(answer.spoken.contains("One more note mentions it"))
+    }
+
+    func testReferencesPointBackAtTheSources() {
+        let identifier = UUID()
+        let answer = AnswerComposer.compose(
+            query: "dentist",
+            sources: [AnswerSource(identifier: identifier, title: "Dentist", snippet: "Tuesday", createdAt: Date(), kindTitle: "Note", score: 1)]
+        )
+        XCTAssertEqual(answer.references.first?.id, identifier)
+        XCTAssertEqual(answer.references.first?.kindTitle, "Note")
+    }
+
+    // MARK: - Worth noting
+
+    /// The concrete things in the quoted lines, as written — never computed.
+    func testAmountsAndDatesAreCalledOut() {
+        let details = AnswerComposer.details(
+            in: ["Al Qersh confirmed the sparing work with 60,000 Omani rial", "Site review on 29 July 2026 at 4 PM"],
+            query: "sparing work"
+        )
+        XCTAssertTrue(details.contains { $0.lowercased().contains("60,000 omani rial") }, "got \(details)")
+        XCTAssertTrue(details.contains { $0.contains("29 July 2026") }, "got \(details)")
+    }
+
+    /// A number next to a word you asked about is an answer.
+    func testALabelledValueYouAskedAboutIsCalledOut() {
+        let details = AnswerComposer.details(in: ["TSH 5.46 0.270 - 4.20 uIU/mL"], query: "what is my TSH value")
+        XCTAssertTrue(details.contains { $0.hasPrefix("TSH 5.46") }, "got \(details)")
+    }
+
+    /// The detector reads a numeric range as a clock time; that is not a detail.
+    func testANumericRangeIsNotADetail() {
+        let details = AnswerComposer.details(in: ["Reference range 2 - 2.54 for that panel"], query: "panel")
+        XCTAssertTrue(details.isEmpty, "got \(details)")
+    }
+
+    func testDetailsAreNotRepeated() {
+        let details = AnswerComposer.details(
+            in: ["Invoice for 1,250 OMR", "The 1,250 OMR invoice is still open"],
+            query: "invoice"
+        )
+        XCTAssertEqual(details.filter { $0.lowercased().contains("1,250 omr") }.count, 1, "got \(details)")
     }
 
     func testSubjectStripsQuestionFiller() {

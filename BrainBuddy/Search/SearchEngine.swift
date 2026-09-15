@@ -249,6 +249,70 @@ final class SearchEngine {
         return clipped(best, to: limit)
     }
 
+    /// The lines of a document that bear on the question, best first, then put
+    /// back into reading order.
+    ///
+    /// `snippet` picks the single line that *answers*; an answer that talks you
+    /// through a document needs the others too — the row above the value, the
+    /// sentence that gives the date, the one that names who said it. Same
+    /// scoring as `snippet`, kept in one place, with two more rules: a line
+    /// that restates one already chosen is skipped (documents repeat
+    /// themselves), and a bare label is joined to the numeric line under it.
+    static func relevantLines(
+        for queryTerms: [String],
+        in text: String,
+        limit: Int = 4,
+        lineLimit: Int = 220,
+        corpusWeight: ((String) -> Double)? = nil
+    ) -> [String] {
+        let lines = Tokenizer.sentences(in: text)
+        guard !lines.isEmpty, limit > 0 else { return [] }
+
+        let wanted = Set(queryTerms)
+        guard !wanted.isEmpty else { return [clipped(lines[0], to: lineLimit)] }
+
+        let lineTokens = lines.map { Tokenizer.tokens(in: $0) }
+        let weights = termWeights(for: wanted, across: lineTokens, corpusWeight: corpusWeight)
+
+        var scored: [(index: Int, score: Double)] = []
+        for (index, tokens) in lineTokens.enumerated() {
+            let present = Set(tokens).intersection(wanted)
+            guard !present.isEmpty else { continue }
+            var score = max(0.001, present.reduce(0.0) { $0 + (weights[$1] ?? 0) })
+            if labelPrecedesValue(tokens, wanted: wanted) {
+                score *= 2.5
+            } else if tokens.contains(where: { $0.first?.isNumber == true }) {
+                score *= 1.05
+            }
+            scored.append((index, score))
+        }
+        guard !scored.isEmpty else { return [] }
+
+        let ranked = scored.sorted { lhs, rhs in
+            lhs.score == rhs.score ? lhs.index < rhs.index : lhs.score > rhs.score
+        }
+
+        var chosen: [Int] = []
+        var chosenTerms: [Set<String>] = []
+        for candidate in ranked where chosen.count < limit {
+            let terms = Set(lineTokens[candidate.index])
+            guard !chosenTerms.contains(where: { DiscussionSummarizer.restates(terms, $0) }) else { continue }
+            chosen.append(candidate.index)
+            chosenTerms.append(terms)
+        }
+
+        return chosen.sorted().map { index in
+            var line = lines[index]
+            if !line.contains(where: \.isNumber), index + 1 < lines.count {
+                let follower = lines[index + 1]
+                if follower.contains(where: \.isNumber), line.count + follower.count + 1 <= lineLimit {
+                    line += " " + follower
+                }
+            }
+            return clipped(line, to: lineLimit)
+        }
+    }
+
     /// How much each query term should count, given how common it is here and —
     /// when the caller knows — across everything else you've saved.
     private static func termWeights(
