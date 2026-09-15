@@ -143,6 +143,11 @@ struct BrainView: View {
 
     // MARK: - The model
 
+    /// The model, on its own dark stage.
+    ///
+    /// Always dark, in both appearances: the tissue is lit and the wires glow,
+    /// and neither survives a white page. Framing it as a panel also says what
+    /// it is — a viewport into something, not a decoration between two lists.
     private var stage: some View {
         BrainSceneView(
             files: sceneFiles,
@@ -150,18 +155,21 @@ struct BrainView: View {
             selectedFile: $openFile,
             resetToken: resetToken
         )
-            .frame(height: 320)
+            .frame(height: 340)
+            .background(Color(uiColor: BrainSceneBuilder.Palette.stage))
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay(alignment: .topTrailing) {
                 Button {
                     resetToken += 1
                 } label: {
                     Image(systemName: "arrow.counterclockwise")
                         .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Color.white)
                         .padding(8)
-                        .background(.ultraThinMaterial, in: Circle())
+                        .background(Color.white.opacity(0.14), in: Circle())
                 }
                 .buttonStyle(.plain)
-                .padding(.trailing, 12)
+                .padding(10)
                 .accessibilityLabel("Straighten the view")
             }
             .overlay(alignment: .bottom) {
@@ -169,9 +177,11 @@ struct BrainView: View {
                      ? "Drag to turn · pinch in to read the nodes · tap one"
                      : "Tap the summary below to open the document")
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Color.white.opacity(0.62))
+                    .padding(.bottom, 8)
                     .allowsHitTesting(false)
             }
+            .padding(.horizontal)
     }
 
 
@@ -482,21 +492,7 @@ struct BrainView: View {
     /// Classification is a token pass over the whole library, so it runs off the
     /// main actor and only when the signature above changes — never per redraw.
     private func rebuild() async {
-        let inputs = filtered.map { item in
-            BrainFileInput(
-                id: item.identifier,
-                title: item.displayTitle,
-                // The row always has something to show when opened, even for a
-                // note whose heading already said everything.
-                summary: item.listSummary.isEmpty ? item.preview : item.listSummary,
-                text: item.text.isEmpty ? item.extractedText : item.text,
-                tags: item.tagNames,
-                kind: item.kind,
-                source: item.source,
-                attachmentNames: item.sortedAttachments.map(\.filename),
-                createdAt: item.createdAt
-            )
-        }
+        let inputs = filtered.map { BrainFileInput($0) }
 
         let built = await Task.detached(priority: .userInitiated) {
             BrainClassifier.map(inputs)

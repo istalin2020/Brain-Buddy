@@ -122,7 +122,7 @@ enum Headline {
     private static let maximumStrippedWords = 5
 
     static func condense(_ sentence: String) -> String? {
-        var words = BriefText.clean(sentence)
+        var words = stripReminderScaffolding(BriefText.clean(sentence))
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
         guard !words.isEmpty else { return nil }
@@ -141,6 +141,26 @@ enum Headline {
         let clipped = clip(joined)
         guard clipped.count >= minimumLength else { return nil }
         return clipped.capitalizedFirst
+    }
+
+    /// Takes "remind me on the 20th to" off the front of a reminder.
+    ///
+    /// *"Remind me on 20th September to get the invoice from the bank"* is a
+    /// sentence addressed to the app, and the app has taken the hint: the line
+    /// sits on the Reminders card with the date as its chip. What the heading
+    /// should say is the thing itself — *"Get the invoice from the bank"* — not
+    /// the instruction to say it. Bounded at sixty characters between "remind"
+    /// and "to", so a "to" deep in an unrelated sentence can't be mistaken for
+    /// the end of the scaffolding.
+    static func stripReminderScaffolding(_ sentence: String) -> String {
+        let stripped = sentence.replacingOccurrences(
+            of: #"^(?:please\s+)?(?:remind|reminder\s+for)\s+(?:me|us)\b[^.]{0,60}?\bto\s+"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        // Never strip the whole line: a reminder with nothing after "to" keeps
+        // its original wording rather than becoming empty.
+        return stripped.split(separator: " ").count >= 2 ? stripped : sentence
     }
 
     /// Prefers to end at a clause break, which in speech usually marks the end

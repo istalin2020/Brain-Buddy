@@ -51,10 +51,25 @@ enum BrainClassifier {
         if input.kind == .image { return .images }
         if input.kind == .voice || hasVideo(input) { return .media }
 
+        return lexicalRegion(for: input) ?? .general
+    }
+
+    /// What a memory is *about* — work, family or friends — from its tags and
+    /// its words alone, ignoring what kind of thing it is.
+    ///
+    /// The brain files a recording under the auditory cortex whatever it says,
+    /// which is right for a map. The brief asks a different question: is this
+    /// line the office's or mine? A voice note about the tender is still about
+    /// the tender, so that answer has to come from the words.
+    static func lexicalRegion(for input: BrainFileInput) -> BrainRegion? {
+        for tag in input.tags {
+            if let tagged = region(forTag: tag), lexicalRegions.contains(tagged) { return tagged }
+        }
+
         // Named `words` rather than `terms`: `let terms = terms(...)` would be a
         // local shadowing the function it is calling.
         let words = terms(in: searchableText(of: input))
-        guard !words.isEmpty else { return .general }
+        guard !words.isEmpty else { return nil }
 
         // How much evidence a long document has to show.
         //
@@ -74,7 +89,7 @@ enum BrainClassifier {
             guard hits >= required else { continue }
             if best == nil || hits > (best?.hits ?? 0) { best = (region, hits) }
         }
-        return best?.region ?? .general
+        return best?.region
     }
 
     /// Distinct words past which a memory counts as a document rather than a
@@ -188,6 +203,13 @@ enum BrainClassifier {
         }
     }
 
+    /// The office's vocabulary.
+    ///
+    /// General business words first, then the words of the work this app's
+    /// first users actually do — transmission-line and construction
+    /// engineering — and then the words correspondence is made of. *"Sir"*,
+    /// *"kindly"* and *"regarding"* are not work in themselves, but nobody
+    /// writes them to their family, and a scanned email is mostly made of them.
     static let workTerms = normalized([
         "meeting", "meetings", "project", "client", "invoice", "deadline",
         "report", "contract", "office", "manager", "boss", "team", "colleague",
@@ -196,7 +218,20 @@ enum BrainClassifier {
         "engineer", "site", "shift", "handover", "hackathon", "schedule",
         "agenda", "minutes", "invoicing", "payment", "purchase", "vendor",
         "supplier", "shutdown", "commissioning", "inspection", "workshop",
-        "interview", "salary", "appraisal", "training", "audit", "compliance"
+        "interview", "salary", "appraisal", "training", "audit", "compliance",
+        "work", "status", "eot", "claim", "variation", "milestone", "progress",
+        "subcontractor", "consultant", "agency", "procurement", "supply",
+        "delivery", "dispatch", "shipment", "consignment", "customs", "bid",
+        "specification", "spec", "method", "statement", "clarification",
+        "quality", "issue", "issues", "damage", "damaged", "material",
+        "materials", "installation", "execution", "erection", "survey",
+        "surveyor", "foundation", "tower", "towers", "cable", "cables",
+        "stringing", "conductor", "insulator", "insulators", "spacer",
+        "galvanisation", "galvanization", "steel", "substation", "transformer",
+        "transmission", "mobilisation", "mobilization", "manpower", "labour",
+        "labor", "crane", "excavation", "concrete", "welding", "earthing",
+        "hardware", "permit", "safety", "hse", "rfi", "boq", "lpo",
+        "regarding", "kindly", "sir", "madam", "dear", "attached", "herewith"
     ])
 
     static let familyTerms = normalized([

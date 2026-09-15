@@ -157,6 +157,30 @@ struct BrainFileInput: Sendable {
     }
 }
 
+extension BrainFileInput {
+    /// The one flattening every screen uses.
+    ///
+    /// The brain and the brief both need to know which region a memory belongs
+    /// to, and if each built its own input they would eventually disagree —
+    /// one reading the OCR text, the other not — and the same document would
+    /// be Work on one tab and General on the other.
+    init(_ item: MemoryItem) {
+        self.init(
+            id: item.identifier,
+            title: item.displayTitle,
+            // The row always has something to show when opened, even for a
+            // note whose heading already said everything.
+            summary: item.listSummary.isEmpty ? item.preview : item.listSummary,
+            text: item.text.isEmpty ? item.extractedText : item.text,
+            tags: item.tagNames,
+            kind: item.kind,
+            source: item.source,
+            attachmentNames: item.sortedAttachments.map(\.filename),
+            createdAt: item.createdAt
+        )
+    }
+}
+
 /// A classified memory, ready to render.
 struct BrainFile: Identifiable, Sendable {
     let id: UUID

@@ -10,13 +10,14 @@ struct BrainSceneFile: Identifiable, Equatable, Sendable {
     let region: BrainRegion
 }
 
-/// The brain: a holographic wireframe you turn, zoom into, and tap.
+/// The brain: a holographic model you turn, zoom into, and tap.
 ///
 /// Everything you have saved is wired to it — one glowing node per document,
-/// on a filament running back to the part of the cortex it was filed under.
-/// Zoomed out that reads as a shape with a nervous system. Zoom in and the
-/// nodes nearest the camera put their names up, because that is the moment you
-/// are actually looking for one thing rather than looking at everything.
+/// sitting *on* the cortex, on a filament running back to the part of it the
+/// document was filed under. Zoomed out that reads as a brain with a nervous
+/// system. Zoom in and the nodes nearest the camera put their names up, because
+/// that is the moment you are actually looking for one thing rather than
+/// looking at everything.
 ///
 /// Drag to turn · pinch to zoom · tap a node.
 @MainActor
@@ -36,8 +37,11 @@ struct BrainSceneView: UIViewRepresentable {
             withName: BrainSceneBuilder.cameraName,
             recursively: true
         )
-        view.backgroundColor = .clear
-        view.antialiasingMode = .multisampling2X
+        // The stage is always dark, whatever the app's appearance. A lit,
+        // glowing model on a white page looked like a mistake — the glow is
+        // *additive*, and adding light to white is invisible.
+        view.backgroundColor = BrainSceneBuilder.Palette.stage
+        view.antialiasingMode = .multisampling4X
         view.autoenablesDefaultLighting = false
         view.allowsCameraControl = true
         view.defaultCameraController.interactionMode = .orbitTurntable
@@ -155,6 +159,15 @@ struct BrainSceneView: UIViewRepresentable {
 }
 
 /// Builds the scene, and updates the parts of it that change.
+///
+/// **Why it looks the way it does.** The first version drew the brain as
+/// additive lines on a transparent background — the film idea of a hologram —
+/// and it did not read as a brain, for a reason that is obvious in hindsight:
+/// a fold you cannot *shade* is a fold nobody sees. Lines show an outline; only
+/// light shows a surface. So the tissue is now a lit, translucent solid that
+/// writes depth, with the wireframe drawn over it as detail rather than as the
+/// whole thing. The far side is hidden by the near side, the gyri catch the
+/// key light, the fissure falls into shadow, and the shape stops being a blob.
 enum BrainSceneBuilder {
     static let cameraName = "camera"
     static let filesName = "files"
@@ -163,18 +176,28 @@ enum BrainSceneBuilder {
     private static let wirePrefix = "wire."
 
     /// How close the camera has to get before a node says what it is.
-    static let labelRevealDistance: Float = 3.4
+    static let labelRevealDistance: Float = 3.2
 
     /// Past this many nodes the scene stops being readable long before it stops
     /// being fast, so the model shows the newest and the list below shows the
     /// rest.
     static let maximumNodes = 120
 
+    /// Where the cerebellum sits, under and behind the cerebrum.
+    static let cerebellumOffset = SIMD3<Float>(0, -0.46, -0.66)
+
+    /// How far above the cortex a document sits, as a multiple of the surface
+    /// radius. Just enough to clear the folds; a node buried in a sulcus is a
+    /// node you cannot tap.
+    static let nodeLift: Float = 1.07
+    /// Filaments run a hair above the surface, so the tissue never hides them.
+    static let wireLift: Float = 1.02
+
     // MARK: - The brain
 
     static func makeScene() -> SCNScene {
         let scene = SCNScene()
-        scene.background.contents = UIColor.clear
+        scene.background.contents = Palette.stage
 
         let brain = SCNNode()
         brain.name = "brain"
@@ -193,49 +216,49 @@ enum BrainSceneBuilder {
         return scene
     }
 
-    /// Two passes over the same surface: a translucent volume so the shape reads
-    /// as solid, and the wireframe over it so it reads as *drawn*. Either alone
-    /// looks like a mistake; together they look like a hologram.
+    /// Two passes over the same surface: a lit translucent solid so the shape
+    /// reads as tissue, and the wireframe over it so it reads as *drawn*.
     private static func cerebrum() -> SCNNode {
-        let node = SCNNode()
-        let geometry = BrainMesh.geometry(.cerebrum)
-
-        node.addChildNode(SCNNode(geometry: volume(of: geometry, tint: Palette.tissue)))
-        node.addChildNode(SCNNode(geometry: wireframe(of: geometry, tint: Palette.wire)))
-        return node
+        surfaceNode(for: BrainMesh.geometry(.cerebrum))
     }
 
     private static func cerebellum() -> SCNNode {
-        let node = SCNNode()
-        let geometry = BrainMesh.geometry(.cerebellum)
+        let node = surfaceNode(for: BrainMesh.geometry(.cerebellum))
+        node.position = SCNVector3(cerebellumOffset.x, cerebellumOffset.y, cerebellumOffset.z)
+        return node
+    }
 
-        node.addChildNode(SCNNode(geometry: volume(of: geometry, tint: Palette.tissue)))
-        node.addChildNode(SCNNode(geometry: wireframe(of: geometry, tint: Palette.wire)))
-        node.position = SCNVector3(0, -0.40, -0.62)
+    private static func surfaceNode(for geometry: SCNGeometry) -> SCNNode {
+        let node = SCNNode()
+
+        let solid = SCNNode(geometry: volume(of: geometry))
+        solid.renderingOrder = RenderOrder.tissue
+        node.addChildNode(solid)
+
+        let lines = SCNNode(geometry: wireframe(of: geometry))
+        // A whisker larger than the tissue, so the lines sit on the surface
+        // instead of fighting it for the same depth.
+        lines.scale = SCNVector3(1.008, 1.008, 1.008)
+        lines.renderingOrder = RenderOrder.wire
+        node.addChildNode(lines)
         return node
     }
 
     private static func stem() -> SCNNode {
         let geometry = BrainMesh.stem()
-        let material = SCNMaterial()
-        material.lightingModel = .constant
-        material.diffuse.contents = Palette.tissue.withAlphaComponent(0.30)
-        material.emission.contents = Palette.wire.withAlphaComponent(0.35)
-        material.blendMode = .add
-        material.writesToDepthBuffer = false
-        geometry.firstMaterial = material
+        geometry.firstMaterial = tissueMaterial()
 
         let node = SCNNode(geometry: geometry)
-        node.position = SCNVector3(0, -0.62, -0.40)
+        node.position = SCNVector3(0, -0.70, -0.40)
         node.eulerAngles = SCNVector3(0.55, 0, 0)
+        node.renderingOrder = RenderOrder.tissue
         return node
     }
 
-    /// The light in the middle. Every hologram in every film has one, and it
-    /// does real work here: it separates the near surface from the far one when
-    /// the whole thing is drawn in lines.
+    /// The light in the middle. Seen faintly through the tissue, breathing —
+    /// it is what says *this thing is on* rather than a museum piece.
     private static func core() -> SCNNode {
-        let geometry = SCNSphere(radius: 0.17)
+        let geometry = SCNSphere(radius: 0.13)
         geometry.segmentCount = 24
 
         let material = SCNMaterial()
@@ -247,32 +270,23 @@ enum BrainSceneBuilder {
         geometry.firstMaterial = material
 
         let node = SCNNode(geometry: geometry)
-        node.addChildNode(coreLight())
+        // Drawn before the tissue, so the tissue blends over it and it glows
+        // from inside rather than sitting in front.
+        node.renderingOrder = RenderOrder.core
         node.runAction(
             .repeatForever(
                 .sequence([
-                    .scale(to: 1.14, duration: 1.9),
-                    .scale(to: 0.94, duration: 1.9)
+                    .scale(to: 1.16, duration: 1.9),
+                    .scale(to: 0.92, duration: 1.9)
                 ])
             )
         )
         return node
     }
 
-    private static func coreLight() -> SCNNode {
-        let node = SCNNode()
-        let light = SCNLight()
-        light.type = .omni
-        light.color = Palette.core
-        light.intensity = 620
-        light.attenuationEndDistance = 4
-        node.light = light
-        return node
-    }
-
     // MARK: - Documents
 
-    /// One node per document, on a filament back to its region.
+    /// One node per document, on the cortex, on a filament back to its region.
     static func rebuildFiles(_ files: [BrainSceneFile], in scene: SCNScene?) {
         guard let container = scene?.rootNode.childNode(withName: filesName, recursively: true) else {
             return
@@ -286,13 +300,13 @@ enum BrainSceneBuilder {
 
         for (region, regionFiles) in byRegion {
             var wire: [SCNVector3] = []
-            let root = anchor(for: region) * 0.98
+            let root = anchor(for: region)
 
             for (index, file) in regionFiles.enumerated() {
-                let position = self.position(for: index, in: regionFiles.count, region: region)
+                let direction = self.direction(for: index, in: regionFiles.count, region: region)
+                let position = cortex(toward: direction, region: region, lift: nodeLift)
                 container.addChildNode(node(for: file, at: position))
-                wire.append(SCNVector3(root.x, root.y, root.z))
-                wire.append(SCNVector3(position.x, position.y, position.z))
+                appendFilament(from: root, to: direction, region: region, into: &wire)
             }
 
             if let filaments = filaments(wire, tint: UIColor(region.tint)) {
@@ -303,7 +317,7 @@ enum BrainSceneBuilder {
     }
 
     private static func node(for file: BrainSceneFile, at position: SIMD3<Float>) -> SCNNode {
-        let geometry = SCNSphere(radius: 0.042)
+        let geometry = SCNSphere(radius: 0.034)
         geometry.segmentCount = 12
 
         let material = SCNMaterial()
@@ -322,7 +336,7 @@ enum BrainSceneBuilder {
     /// The name, as a billboarded panel. Hidden until the camera is close —
     /// see the renderer delegate.
     private static func label(_ text: String, tint: UIColor) -> SCNNode {
-        let plane = SCNPlane(width: 0.62, height: 0.155)
+        let plane = SCNPlane(width: 0.56, height: 0.14)
         let material = SCNMaterial()
         material.lightingModel = .constant
         material.diffuse.contents = labelImage(text, tint: tint)
@@ -334,8 +348,9 @@ enum BrainSceneBuilder {
 
         let node = SCNNode(geometry: plane)
         node.name = labelName
-        node.position = SCNVector3(0, 0.13, 0)
+        node.position = SCNVector3(0, 0.11, 0)
         node.isHidden = true
+        node.renderingOrder = RenderOrder.label
         node.constraints = [SCNBillboardConstraint()]
         return node
     }
@@ -369,6 +384,36 @@ enum BrainSceneBuilder {
         }
     }
 
+    /// One filament, as an arc that hugs the cortex from the region's anchor to
+    /// the document.
+    ///
+    /// A straight line between two points on a sphere is a chord through the
+    /// middle of it, and now that the tissue hides what is behind it, a chord
+    /// would vanish into the brain and come out the other side. So the wire
+    /// follows the surface instead — a few short segments, each looked up on
+    /// the mesh — and lifts slightly in the middle so it visibly *runs over*
+    /// the folds rather than through them.
+    private static func appendFilament(
+        from start: SIMD3<Float>,
+        to end: SIMD3<Float>,
+        region: BrainRegion,
+        into points: inout [SCNVector3]
+    ) {
+        let steps = 6
+        var previous = cortex(toward: start, region: region, lift: wireLift)
+        for step in 1...steps {
+            let progress = Float(step) / Float(steps)
+            let direction = slerp(start, end, progress)
+            let lift = step == steps
+                ? nodeLift
+                : wireLift + 0.05 * sin(progress * .pi)
+            let point = cortex(toward: direction, region: region, lift: lift)
+            points.append(SCNVector3(previous.x, previous.y, previous.z))
+            points.append(SCNVector3(point.x, point.y, point.z))
+            previous = point
+        }
+    }
+
     /// All of one region's filaments as a single line geometry — one node per
     /// wire would be a hundred draw calls for something nobody taps.
     private static func filaments(_ points: [SCNVector3], tint: UIColor) -> SCNNode? {
@@ -382,13 +427,15 @@ enum BrainSceneBuilder {
 
         let material = SCNMaterial()
         material.lightingModel = .constant
-        material.diffuse.contents = tint.withAlphaComponent(0.42)
-        material.emission.contents = tint.withAlphaComponent(0.42)
+        material.diffuse.contents = tint.withAlphaComponent(0.55)
+        material.emission.contents = tint.withAlphaComponent(0.55)
         material.blendMode = .add
         material.writesToDepthBuffer = false
         geometry.firstMaterial = material
 
-        return SCNNode(geometry: geometry)
+        let node = SCNNode(geometry: geometry)
+        node.renderingOrder = RenderOrder.filament
+        return node
     }
 
     // MARK: - Emphasis
@@ -427,7 +474,7 @@ enum BrainSceneBuilder {
             let isSelected = name == selectedName
             let isDimmed = highlight != nil && regions[name] != highlight
             node.opacity = isDimmed && !isSelected ? 0.18 : 1
-            node.scale = isSelected ? SCNVector3(1.8, 1.8, 1.8) : SCNVector3(1, 1, 1)
+            node.scale = isSelected ? SCNVector3(1.9, 1.9, 1.9) : SCNVector3(1, 1, 1)
         }
     }
 
@@ -450,21 +497,25 @@ enum BrainSceneBuilder {
 
     /// The direction of each region, spread around the brain so no two clusters
     /// overlap — and placed where that part of the cortex actually is.
+    ///
+    /// General's direction is relative to the cerebellum, which is where it
+    /// lives; the others are relative to the cerebrum.
     static func anchor(for region: BrainRegion) -> SIMD3<Float> {
         switch region {
-        case .work: return normalize(SIMD3<Float>(0.42, 0.34, 1.00))
-        case .friends: return normalize(SIMD3<Float>(-0.44, 0.96, -0.22))
-        case .media: return normalize(SIMD3<Float>(1.00, -0.26, 0.18))
-        case .images: return normalize(SIMD3<Float>(0.06, 0.22, -1.05))
-        case .family: return normalize(SIMD3<Float>(-1.00, -0.16, 0.30))
-        case .general: return normalize(SIMD3<Float>(0.22, -0.86, -0.58))
+        case .work: return normalize(SIMD3<Float>(0.40, 0.42, 1.00))
+        case .friends: return normalize(SIMD3<Float>(-0.46, 0.96, -0.30))
+        case .media: return normalize(SIMD3<Float>(1.00, -0.18, 0.12))
+        case .images: return normalize(SIMD3<Float>(0.10, 0.30, -1.05))
+        case .family: return normalize(SIMD3<Float>(-1.00, -0.10, 0.34))
+        case .general: return normalize(SIMD3<Float>(0.30, -0.50, -1.00))
         }
     }
 
-    /// A golden-angle spiral around the region's direction, pushed out onto a
-    /// shell. Deterministic, so a document keeps its place between visits —
-    /// which is the entire point of arranging them in space at all.
-    static func position(for index: Int, in total: Int, region: BrainRegion) -> SIMD3<Float> {
+    /// The direction of the `index`th document in a region: a golden-angle
+    /// spiral around the region's direction. Deterministic, so a document keeps
+    /// its place between visits — which is the entire point of arranging them
+    /// in space at all.
+    static func direction(for index: Int, in total: Int, region: BrainRegion) -> SIMD3<Float> {
         let axis = anchor(for: region)
         let reference: SIMD3<Float> = abs(axis.y) > 0.9
             ? SIMD3<Float>(1, 0, 0)
@@ -476,11 +527,34 @@ enum BrainSceneBuilder {
         let angle = Float(index) * goldenAngle
         // Spread grows with the square root of the index, which is what keeps a
         // spiral evenly dense rather than crowded in the middle.
-        let spread = 0.62 * sqrt(Float(index + 1) / Float(max(total, 1)))
+        let spread = 0.55 * sqrt(Float(index + 1) / Float(max(total, 1)))
         let offset = right * (cos(angle) * spread) + forward * (sin(angle) * spread)
+        return normalize(axis + offset)
+    }
 
-        let shell: Float = 1.46 + 0.13 * Float(index % 3)
-        return normalize(axis + offset) * shell
+    /// Where a document sits: on the cortex, in its direction, lifted clear of
+    /// the folds.
+    static func position(for index: Int, in total: Int, region: BrainRegion) -> SIMD3<Float> {
+        cortex(toward: direction(for: index, in: total, region: region), region: region, lift: nodeLift)
+    }
+
+    /// The surface in a given direction, in scene coordinates — the cerebellum
+    /// for General, the cerebrum for everything else.
+    static func cortex(toward direction: SIMD3<Float>, region: BrainRegion, lift: Float) -> SIMD3<Float> {
+        if region == .general {
+            return cerebellumOffset + BrainMesh.surfacePoint(toward: direction, shape: .cerebellum) * lift
+        }
+        return BrainMesh.surfacePoint(toward: direction, shape: .cerebrum) * lift
+    }
+
+    /// Spherical interpolation between two unit vectors — the path a wire takes
+    /// over a curved surface.
+    private static func slerp(_ from: SIMD3<Float>, _ to: SIMD3<Float>, _ progress: Float) -> SIMD3<Float> {
+        let cosine = max(-1, min(1, dot(from, to)))
+        let omega = acos(cosine)
+        guard omega > 1e-4 else { return from }
+        let sine = sin(omega)
+        return (from * sin((1 - progress) * omega) + to * sin(progress * omega)) / sine
     }
 
     // MARK: - Camera and light
@@ -501,13 +575,14 @@ enum BrainSceneBuilder {
         let node = SCNNode()
         node.name = cameraName
         let camera = SCNCamera()
-        camera.fieldOfView = 42
+        camera.fieldOfView = 40
         camera.zNear = 0.05
         camera.zFar = 120
-        // The glow is the point of the look, so let the bright parts bloom.
-        camera.bloomIntensity = 0.75
-        camera.bloomBlurRadius = 12
-        camera.bloomThreshold = 0.55
+        // The glow is part of the look, so let the bright parts bloom — but
+        // not so much that the lit tissue washes out.
+        camera.bloomIntensity = 0.55
+        camera.bloomBlurRadius = 10
+        camera.bloomThreshold = 0.62
         node.camera = camera
         node.transform = defaultCameraTransform()
         return node
@@ -517,75 +592,119 @@ enum BrainSceneBuilder {
     /// the cerebellum at once, so no cluster is hidden when the screen opens.
     private static func defaultCameraTransform() -> SCNMatrix4 {
         let node = SCNNode()
-        node.position = SCNVector3(2.7, 1.5, 3.9)
+        node.position = SCNVector3(2.5, 1.35, 3.6)
         node.look(
-            at: SCNVector3(0, -0.05, 0),
+            at: SCNVector3(0, -0.08, 0),
             up: SCNVector3(0, 1, 0),
             localFront: SCNVector3(0, 0, -1)
         )
         return node.transform
     }
 
+    /// A three-point rig. The key from the front-top-right makes the gyri read;
+    /// the fill keeps the shadow side from going black; the rim, from behind,
+    /// draws the silhouette in cyan so the outline is there even where nothing
+    /// else is.
     private static func lights() -> [SCNNode] {
         let key = SCNNode()
         key.light = SCNLight()
         key.light?.type = .directional
-        key.light?.intensity = 520
-        key.light?.color = Palette.wire
+        key.light?.intensity = 900
+        key.light?.color = Palette.key
         key.position = SCNVector3(3, 4, 5)
         key.look(at: SCNVector3Zero, up: SCNVector3(0, 1, 0), localFront: SCNVector3(0, 0, -1))
+
+        let fill = SCNNode()
+        fill.light = SCNLight()
+        fill.light?.type = .directional
+        fill.light?.intensity = 300
+        fill.light?.color = Palette.fill
+        fill.position = SCNVector3(-4, 1, 2)
+        fill.look(at: SCNVector3Zero, up: SCNVector3(0, 1, 0), localFront: SCNVector3(0, 0, -1))
 
         let rim = SCNNode()
         rim.light = SCNLight()
         rim.light?.type = .directional
-        rim.light?.intensity = 380
+        rim.light?.intensity = 500
         rim.light?.color = Palette.rim
-        rim.position = SCNVector3(-4, -1, -3)
+        rim.position = SCNVector3(-2, -1, -4)
         rim.look(at: SCNVector3Zero, up: SCNVector3(0, 1, 0), localFront: SCNVector3(0, 0, -1))
 
         let ambient = SCNNode()
         ambient.light = SCNLight()
         ambient.light?.type = .ambient
-        ambient.light?.intensity = 180
+        ambient.light?.intensity = 140
         ambient.light?.color = Palette.ambient
 
-        return [key, rim, ambient]
+        return [key, fill, rim, ambient]
     }
 
     // MARK: - Materials
 
-    private static func volume(of geometry: SCNGeometry, tint: UIColor) -> SCNGeometry {
+    private static func volume(of geometry: SCNGeometry) -> SCNGeometry {
         let copy = (geometry.copy() as? SCNGeometry) ?? geometry
-        let material = SCNMaterial()
-        material.lightingModel = .constant
-        material.diffuse.contents = tint.withAlphaComponent(0.16)
-        material.emission.contents = tint.withAlphaComponent(0.10)
-        material.blendMode = .add
-        material.isDoubleSided = true
-        material.writesToDepthBuffer = false
-        copy.firstMaterial = material
+        copy.firstMaterial = tissueMaterial()
         return copy
     }
 
-    private static func wireframe(of geometry: SCNGeometry, tint: UIColor) -> SCNGeometry {
+    /// Lit, translucent, and depth-writing. Translucent so the core and the far
+    /// nodes show through faintly, as they would in glass; depth-writing so the
+    /// near surface hides the far one, which is what makes it a solid.
+    /// `.singleLayer` draws only the nearest surface, so the inside of the mesh
+    /// never darkens the outside.
+    private static func tissueMaterial() -> SCNMaterial {
+        let material = SCNMaterial()
+        material.lightingModel = .blinn
+        material.diffuse.contents = Palette.tissue
+        material.specular.contents = UIColor.white.withAlphaComponent(0.55)
+        material.shininess = 0.30
+        material.emission.contents = Palette.wire.withAlphaComponent(0.08)
+        material.transparency = 0.66
+        material.transparencyMode = .singleLayer
+        material.isDoubleSided = false
+        material.writesToDepthBuffer = true
+        material.readsFromDepthBuffer = true
+        return material
+    }
+
+    private static func wireframe(of geometry: SCNGeometry) -> SCNGeometry {
         let copy = (geometry.copy() as? SCNGeometry) ?? geometry
         let material = SCNMaterial()
         material.lightingModel = .constant
         material.fillMode = .lines
-        material.diffuse.contents = tint.withAlphaComponent(0.55)
-        material.emission.contents = tint.withAlphaComponent(0.55)
+        material.diffuse.contents = Palette.wire.withAlphaComponent(0.34)
+        material.emission.contents = Palette.wire.withAlphaComponent(0.34)
         material.blendMode = .add
+        // Reads depth, so the lines on the far side are hidden by the tissue
+        // in front — a wireframe you can see through is the tangle that
+        // didn't look like a brain.
+        material.readsFromDepthBuffer = true
         material.writesToDepthBuffer = false
         copy.firstMaterial = material
         return copy
     }
 
+    /// The order things are drawn in. Transparent parts are sorted by this
+    /// before distance, and everything here shares the same centre, so leaving
+    /// it to distance would shuffle the layers between frames.
+    private enum RenderOrder {
+        static let core = 5
+        static let tissue = 10
+        static let wire = 20
+        static let filament = 30
+        static let label = 100
+    }
+
     /// One place to change the whole look.
     enum Palette {
-        static let wire = UIColor(red: 0.42, green: 0.72, blue: 1.00, alpha: 1)
-        static let tissue = UIColor(red: 0.55, green: 0.45, blue: 1.00, alpha: 1)
-        static let core = UIColor(red: 0.65, green: 0.90, blue: 1.00, alpha: 1)
-        static let rim = UIColor(red: 0.75, green: 0.40, blue: 1.00, alpha: 1)
-        static let ambient = UIColor(red: 0.20, green: 0.30, blue: 0.55, alpha: 1)
+        /// Deep navy. The stage is this colour in both appearances.
+        static let stage = UIColor(red: 0.035, green: 0.050, blue: 0.125, alpha: 1)
+        static let tissue = UIColor(red: 0.30, green: 0.50, blue: 0.96, alpha: 1)
+        static let wire = UIColor(red: 0.58, green: 0.86, blue: 1.00, alpha: 1)
+        static let core = UIColor(red: 0.72, green: 0.92, blue: 1.00, alpha: 1)
+        static let key = UIColor(red: 0.88, green: 0.93, blue: 1.00, alpha: 1)
+        static let fill = UIColor(red: 0.55, green: 0.42, blue: 1.00, alpha: 1)
+        static let rim = UIColor(red: 0.30, green: 0.90, blue: 1.00, alpha: 1)
+        static let ambient = UIColor(red: 0.18, green: 0.24, blue: 0.48, alpha: 1)
     }
 }

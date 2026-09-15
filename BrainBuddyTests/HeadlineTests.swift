@@ -160,4 +160,24 @@ final class HeadlineTests: XCTestCase {
         )
         XCTAssertFalse(condensed.hasSuffix("with"), "got “\(condensed)”")
     }
+
+    // MARK: - Reminders
+
+    /// The instruction to remind is scaffolding; the thing to be reminded of is
+    /// the heading. The date lives on the row's chip.
+    func testAReminderIsHeadedByTheThingItself() throws {
+        let condensed = try XCTUnwrap(
+            Headline.condense("Remind me on 20th September to get the invoice from the bank")
+        )
+        XCTAssertEqual(condensed, "Get the invoice from the bank")
+    }
+
+    func testStrippingTheScaffoldingNeverEmptiesTheLine() {
+        XCTAssertEqual(Headline.stripReminderScaffolding("Remind me to"), "Remind me to")
+    }
+
+    func testALineThatMerelyMentionsRemindingIsLeftAlone() {
+        let line = "The bank will remind us to renew before the deadline"
+        XCTAssertEqual(Headline.stripReminderScaffolding(line), line)
+    }
 }

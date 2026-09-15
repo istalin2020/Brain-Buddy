@@ -503,6 +503,93 @@ final class IngestService {
             : "Already in your brain — “\(name)”."
     }
 
+    // MARK: - Duplicates already in the library
+
+    /// Finds captures that arrived more than once before the app checked for
+    /// that, and keeps one of each. Returns how many copies went to the trash.
+    ///
+    /// The duplicate check at capture only protects what arrives *after* it
+    /// shipped; the library it shipped into already held the same bank message
+    /// four times, filed two different ways. Fingerprints were written at
+    /// capture too, so anything saved by an earlier build has none — those are
+    /// fingerprinted here first, from their words, and from their bytes only
+    /// when there are no words.
+    ///
+    /// The **oldest** copy is kept: it is the one brief lines, connections and
+    /// Spotlight already point at. Anything a newer copy had that it lacks — a
+    /// summary you saved, a title you typed, a tag — moves across before the
+    /// copy goes. And it goes to the trash rather than being deleted, so a
+    /// wrong guess costs a tap in Trash and not a document.
+    @discardableResult
+    func mergeDuplicates(in context: ModelContext) -> Int {
+        let descriptor = FetchDescriptor<MemoryItem>(
+            predicate: #Predicate { !$0.isTrashed },
+            sortBy: [SortDescriptor(\.createdAt)]
+        )
+        guard let items = try? context.fetch(descriptor) else { return 0 }
+
+        var originals: [String: MemoryItem] = [:]
+        var trashed: [UUID] = []
+
+        for item in items {
+            if item.contentFingerprint.isEmpty {
+                let body = [item.text, item.extractedText]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n")
+                // Words first; the payload is only read when there are none,
+                // because it can be a whole PDF sitting in external storage.
+                guard let fingerprint = CaptureFingerprint.text(body)
+                    ?? item.sortedAttachments.first?.payload.flatMap({ $0.isEmpty ? nil : CaptureFingerprint.payload($0) })
+                else { continue }
+                item.contentFingerprint = fingerprint
+            }
+
+            guard let original = originals[item.contentFingerprint] else {
+                originals[item.contentFingerprint] = item
+                continue
+            }
+
+            absorb(item, into: original, in: context)
+            item.isTrashed = true
+            item.touch()
+            trashed.append(item.identifier)
+        }
+
+        // Saved even when nothing was merged: fingerprints filled in above are
+        // what makes the *next* capture's duplicate check work.
+        save(context)
+        guard !trashed.isEmpty else { return 0 }
+
+        SpotlightIndexer.remove(identifiers: trashed)
+        lastNotice = trashed.count == 1
+            ? "Merged 1 duplicate capture into the trash."
+            : "Merged \(trashed.count) duplicate captures into the trash."
+        return trashed.count
+    }
+
+    /// Whatever the copy had that the original doesn't.
+    private func absorb(_ copy: MemoryItem, into original: MemoryItem, in context: ModelContext) {
+        var changed = false
+
+        if copy.hasCustomTitle, !original.hasCustomTitle {
+            original.title = copy.title
+            original.hasCustomTitle = true
+            changed = true
+        }
+        if copy.hasSummary, !copy.summaryIsAutomatic,
+           !original.hasSummary || original.summaryIsAutomatic {
+            original.summary = copy.summary
+            original.summaryIsAutomatic = false
+            changed = true
+        }
+        for name in copy.tagNames where !original.tagNames.contains(name) {
+            attach(tagNamed: name, to: original, in: context)
+            changed = true
+        }
+
+        if changed { original.touch() }
+    }
+
     // MARK: - System search
 
     /// Adds or refreshes one memory in the device's own search index.

@@ -51,6 +51,17 @@ a sunset), and nothing at all when there are fewer than five words — a scrap o
 OCR is not enough to declare two things the same. A duplicate says so on screen
 and names what it matched, rather than silently doing nothing.
 
+**And the copies that were already there get merged.** The check at capture
+only protects what arrives after it shipped; the library it shipped into still
+held the same bank message four times. So on every launch — and from
+Settings › Maintenance › *Merge duplicate captures* — the app fingerprints
+anything that has no fingerprint yet (words first, bytes only when there are no
+words) and keeps **one of each**: the oldest copy, because that is what brief
+lines, connections and iPhone Search already point at. Anything a newer copy had
+that the original lacks — a summary you saved, a title you typed, a tag — moves
+across first. The copies go to the **trash**, not away, so a wrong guess costs a
+tap and not a document; and the brief drops whatever lines were quoting them.
+
 **Documents are read when they arrive.** A scan, a PDF, a screenshot or a
 recording lands as a wall of text with no shape to it, and leaving that until
 somebody presses *Create summary* made the library a list of first lines. Now the
@@ -122,23 +133,35 @@ the note itself was written today, where "call at 4" plainly means this afternoo
 
 **Today is a board of cards, not a list.** Twenty rows with a quoted paragraph
 under each one is a wall — you cannot see the shape of your day in it. Each
-group is now a card with a coloured tile, a count, five rows and a **+N more**,
-and the quote moves where quotes belong: inside the note, when you go looking
-for it.
+group is a card with a coloured tile, a count, five rows and a **+N more**, and
+the quote moves where quotes belong: inside the note, when you go looking for
+it. The cards are the four questions a morning actually has:
 
 | Card | What lands on it |
 | --- | --- |
-| **Top priorities** | What's happening today, and anything open three days or more. Three days is the point where "I'll get to it" has been said twice; listing that politely among thirty others is not helping. |
-| **To-do** | Everything else still owed. |
-| **Calls & emails** | Lines that are really "get in touch with somebody" — they need an explicit *email*, *call*, *reply*. Plain "send" isn't enough: *"Galvanisation previous reading, send it to Pandi"* is a job with a hand-off at the end, not a call. |
-| **Worth knowing** | Key points. Nothing to do. |
+| **Reminders** | Anything about *when*: a line that names a day, a date or a clock time — *"Submit the shutdown plan by Friday"*, *"Call the site office at 4:30"* — or says *remind*, *due*, *deadline*, *renew*, *expires*, *appointment*. Soonest first, each with a chip saying when: the time if it's today, *Tomorrow*, the weekday if it's this week, the date otherwise, and red once it has gone by. A month in a sentence about the past — *"at the yard since March"* — is history, not a reminder. |
+| **Office to-do** | Work you said you'd do. |
+| **Personal to-do** | Everything else you said you'd do. |
+| **Important info** | Worth remembering, nothing to do: *"Al Qersh confirmed to do the sparing work with 60,000 Omani rial"*, *"The wifi password is 12345"*, a key point out of a summary. |
 | **Done today** | Closed today, shut by default — a record of work, not a list of it, and it should never push today's own cards down. |
 
-Each line lands on **exactly one** card, decided once in that order: age outranks
-the medium, so an email you should have sent four days ago is a priority rather
-than something filed politely under calls. Rows carry a small right-hand chip
-with the time it happens or how long it has waited — both answer *how urgent is
-this* in three characters.
+Each line lands on **exactly one** card, decided once, in the order of
+certainty. *When* comes first, because a date settles it whatever else the line
+says. Then **to do, or to know**: an instruction (*"Send the drawings"*), a
+commitment (*"I have to close the approval"*) or an obligation (*"…to be
+reviewed by the agency"*) is a to-do; a line that reports something that
+happened (*confirmed, processed, was, been, since*) or states how things are
+(*"quality is poor"*) is information; and a bare label — *"EOT submission"*,
+*"Haffaf Muscat drawing status"* — is what a quick capture of something to deal
+with looks like, so it's a to-do. Only a to-do is then split by **whose work it
+is**: the line's own vocabulary decides when it can (*insulator*, *tender*,
+*galvanisation* against *daughter*, *school*, *wedding*), and a neutral line —
+*"Send it to Pandi"* — takes its side from the document it was quoted out of,
+which is how a sentence from a work email stays with the office. Information
+never has to guess whether it is office or personal, because it doesn't need to
+be either. A reminder's heading is the thing itself: *"Remind me on 20th
+September to get the invoice"* is headed *Get the invoice*, with the date on
+the chip. To-do rows carry a chip with how long they have waited.
 
 Every line has a circle you tap to **close** it, or leave open. Closing survives
 relaunching and syncs to your other devices, because a brief you can't tick off
@@ -187,15 +210,22 @@ only a clause break when whitespace follows it, so *"…the sparing work with
 decimal point ending a sentence, and the same reason it matters — a number that
 quietly loses four digits reads as a fact.
 
-**One memory, one line.** A scanned meeting invitation used to produce five
-rows — the jury round, the schedule, how the session runs, and two restatements
-of the same thing — which is one thing to know, reported five times, pushing
-everything else off the screen. A brief is a list of things, not a list of
-sentences. Which line survives is decided by what a morning needs first:
-something happening today beats something to do, which beats something to bear
-in mind. Briefs built before this rule collapse themselves the next time you open
-the app, and a line you already closed is never collapsed away — ticking
-something off is a decision, and the record of it is not a duplicate.
+**Every distinct thing in a document, and nothing twice.** A scanned meeting
+invitation used to produce five rows — the jury round, the schedule, how the
+session runs, and two restatements of the same thing — which is one thing to
+know, reported five times. One line per document was the first answer, and it
+was too few: a site email carries a deadline, a thing to send and a figure to
+remember, and showing only the first is a sample, not a summary. So a document
+may put **up to three lines** in the brief, and each has to say something the
+others don't — judged the way the summarizer judges it, on shared words, so
+*"Your jury round is scheduled"* and *"Your AI Hackathon jury round is
+scheduled for Wednesday"* are one line. When a document has more, it is the
+deadline and the to-dos that survive, never the third key point. Rebuilding
+never adds a line that restates one its document already has, briefs built
+before this rule collapse themselves the next time you open the app, and a line
+whose document has been trashed — or merged away as a duplicate — goes with it.
+A line you already closed is never collapsed or removed: ticking something off
+is a decision, and the record of it is not a duplicate.
 
 **A line has to say something.** *"29th September mostly 11:50 AM"* is a date, a
 filler word and a clock reading; it is true, it was in the transcript, and it is
@@ -419,18 +449,28 @@ deliberately down the midline (that single groove is what separates a brain from
 a blob), a tapered forehead, a temporal bulge and a flattened underside. Then a
 cerebellum with tight parallel ridges, and a stem.
 
-It is drawn twice over: a translucent additive volume so the shape reads as
-solid, and a **wireframe** over the top so it reads as *drawn*. Either alone
-looks like a mistake; together they look like a hologram. A pulsing core in the
-middle does real work — it separates the near surface from the far one when
-everything is lines — and the camera has bloom turned up so the bright parts
-glow.
+**Lit, not just outlined.** The first version drew the brain as glowing lines
+on a transparent background — the film idea of a hologram — and it did not read
+as a brain, for a reason that is obvious in hindsight: a fold you cannot
+*shade* is a fold nobody sees. Lines show an outline; only light shows a
+surface. So the tissue is now a lit, translucent solid that writes depth, on
+its own **dark stage** in both appearances, with a three-point rig — a key from
+the front-top-right that makes the gyri read, a violet fill so the shadow side
+never goes black, a cyan rim from behind that draws the silhouette. The near
+surface hides the far one, the fissure falls into shadow, and the wireframe
+over the top is detail rather than the whole drawing. The core still breathes
+in the middle, seen faintly through the tissue, and the camera has bloom so the
+bright parts glow.
 
-**Every document is wired to it.** One node per memory, on a filament running
-back to the part of the cortex it was filed under, arranged on a golden-angle
-spiral around its region's direction so clusters stay evenly dense and each
-document keeps its place between visits — which is the entire point of putting
-them in space. Zoomed out, that reads as a shape with a nervous system.
+**Every document is wired to it — on the cortex.** One node per memory, sitting
+*on* the surface in its region's direction rather than floating in a shell
+around it, on a golden-angle spiral so clusters stay evenly dense and each
+document keeps its place between visits. Its filament runs back to the region's
+anchor **over** the folds — a few short segments looked up on the mesh, lifted
+a little in the middle — because a straight line between two points on a
+curved surface is a chord through the inside, and now that the tissue hides
+what's behind it, a chord would vanish into the brain. Zoomed out, that reads
+as a brain with a nervous system.
 
 **Zoom in and the near nodes say what they are.** Names appear on the nodes
 closest to the camera, by distance rather than by zoom level, so a crowded region
@@ -461,6 +501,12 @@ passes: a `#tag` you typed settles it outright; then what the thing *is* (a phot
 goes to the visual cortex whatever it is about, or the map stops feeling
 consistent); then what it *says*, against a small lexicon per region, with the
 most hits winning and nothing forced anywhere — unmatched memories go to General.
+The work lexicon knows the office in general (*meeting*, *invoice*, *tender*)
+and the work its first users actually do — *tower*, *cable*, *insulator*,
+*stringing*, *galvanisation*, *EOT* — and the words correspondence is made of
+(*sir*, *kindly*, *regarding*), which nobody writes to their family. The brief
+asks the same lexicon a narrower question — what is this recording *about*,
+whatever it is — to decide whose to-do a line is.
 Both sides of every word comparison are stemmed to a fixpoint, because the search
 stemmer applies one rule per word: `"meetings"` stops at `"meeting"` while the
 lexicon's `"meeting"` becomes `"meet"`, and compared directly they would never

@@ -23,30 +23,33 @@ enum BrainMesh {
     /// Everything adjustable, in one place, so the shape can be tuned without
     /// reading the generator.
     struct Shape {
-        /// Latitude bands. More is smoother and costs triangles.
-        var rings = 56
+        /// Latitude bands. Fewer than you'd think: the wireframe is drawn from
+        /// these, and a fine mesh blurs into haze while a coarser one reads as
+        /// folds.
+        var rings = 44
         /// Longitude divisions.
-        var segments = 88
+        var segments = 72
         /// Width, height, depth. A human cerebrum is roughly 14 × 9 × 17 cm.
-        var size = SIMD3<Float>(0.80, 0.68, 1.02)
-        /// How deep the folds are cut.
-        var gyriDepth: Float = 0.052
-        /// How deep the midline groove is.
-        var fissureDepth: Float = 0.20
+        var size = SIMD3<Float>(0.84, 0.70, 1.06)
+        /// How deep the folds are cut. Deep enough to shade — a fold that only
+        /// shows in the wireframe is a fold nobody sees.
+        var gyriDepth: Float = 0.078
+        /// How deep the midline groove is. This is what makes two hemispheres.
+        var fissureDepth: Float = 0.36
         /// How wide the midline groove is, as a fraction of the width.
-        var fissureWidth: Float = 0.20
+        var fissureWidth: Float = 0.24
         /// 0 for the cerebrum; the cerebellum uses tight parallel ridges.
         var ridged = false
 
         static let cerebrum = Shape()
 
         static let cerebellum = Shape(
-            rings: 28,
-            segments: 44,
-            size: SIMD3<Float>(0.46, 0.26, 0.34),
-            gyriDepth: 0.05,
-            fissureDepth: 0.06,
-            fissureWidth: 0.16,
+            rings: 26,
+            segments: 40,
+            size: SIMD3<Float>(0.50, 0.28, 0.36),
+            gyriDepth: 0.06,
+            fissureDepth: 0.10,
+            fissureWidth: 0.18,
             ridged: true
         )
     }
@@ -77,10 +80,12 @@ enum BrainMesh {
             radius += shape.gyriDepth * sin(26 * phi) * 0.8
             radius += shape.gyriDepth * 0.35 * sin(9 * theta + 2 * phi)
         } else {
-            let coarse = sin(9 * phi + 2.6 * cos(4 * theta))
-            let medium = sin(7.5 * theta + 1.7 * phi)
-            let fine = sin(15 * phi + 4.5 * theta)
-            radius += shape.gyriDepth * (0.55 * coarse * medium + 0.28 * fine)
+            // The bands run roughly front-to-back and curve, the way sulci do,
+            // with a finer wrinkle on top so no two folds look alike.
+            let coarse = sin(8.0 * phi + 2.4 * cos(3.0 * theta))
+            let medium = sin(6.5 * theta + 1.9 * phi)
+            let fine = sin(13.0 * phi + 4.0 * theta + 0.8 * sin(5.0 * theta))
+            radius += shape.gyriDepth * (0.60 * coarse * medium + 0.40 * fine)
         }
 
         // The midline groove, cut on the top half only — underneath, the two
@@ -116,6 +121,20 @@ enum BrainMesh {
         }
 
         return point
+    }
+
+    /// The surface, looked up by direction rather than by parameter.
+    ///
+    /// Documents sit *on* the cortex, and to put one there you need to know how
+    /// far out the surface is in that direction. Inverting the parameterisation
+    /// is close enough — the deformations move points a little off their ray,
+    /// but a node a hair above or below a fold still reads as being on it.
+    static func surfacePoint(toward direction: SIMD3<Float>, shape: Shape = .cerebrum) -> SIMD3<Float> {
+        let unit = normalizedOrUp(direction)
+        let phi = acos(max(-1, min(1, unit.y)))
+        var theta = atan2(unit.z, unit.x)
+        if theta < 0 { theta += 2 * .pi }
+        return point(u: theta / (2 * .pi), v: phi / .pi, shape: shape)
     }
 
     // MARK: - Geometry

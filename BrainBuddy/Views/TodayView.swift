@@ -1,13 +1,19 @@
 import SwiftData
 import SwiftUI
 
-/// This morning's brief, as a handful of cards.
+/// This morning's brief, as four cards.
 ///
 /// It was one flat list with a quoted paragraph under every row, and at twenty
 /// lines that is a wall rather than a plan — you cannot see the shape of your
 /// day in it. Now each group is a card with a coloured tile, a count and five
 /// rows, and everything past that is one tap behind **+N more**. The quote moves
 /// where quotes belong: inside the note, when you go looking for it.
+///
+/// The cards are the four questions a morning has: **Reminders** (what has a
+/// day or a time on it), **Office to-do**, **Personal to-do**, and
+/// **Important info** (worth remembering, nothing to do). Every line the brief
+/// pulled out of your documents lands on exactly one of them — see
+/// `BriefGrouping` for the order they are claimed in.
 ///
 /// Everything here was already in your brain. The brief doesn't add knowledge,
 /// it just puts today's slice of it in front of you at the hour you asked for.
@@ -20,8 +26,9 @@ struct TodayView: View {
     /// them. Bounded so the query doesn't grow without limit over years of use.
     @Query private var entries: [BriefEntry]
 
-    /// Used only to resolve the "open the note this came from" links. Same
-    /// whole-library query the Ask and Brain tabs already use.
+    /// Used to resolve the "open the note this came from" links, and to decide
+    /// whose work a line is. Same whole-library query the Ask and Brain tabs
+    /// already use.
     @Query(filter: #Predicate<MemoryItem> { !$0.isTrashed })
     private var memories: [MemoryItem]
 
@@ -29,6 +36,12 @@ struct TodayView: View {
     @State private var isRefreshing = false
     @State private var refreshNotice: String?
     @State private var noticeDismissal: Task<Void, Never>?
+
+    /// What each source document is about — work, family, friends — so a line
+    /// that doesn't say can take its answer from the note it came from.
+    /// Classification tokenizes the whole document, so it runs off the main
+    /// actor once per change rather than in every body pass.
+    @State private var sourceRegions: [UUID: BrainRegion] = [:]
 
     /// What a card looks like, named once.
     ///
@@ -92,6 +105,7 @@ struct TodayView: View {
                 await services.offerMorningBriefIfNeeded()
                 await services.refreshReminders(in: modelContext)
             }
+            .task(id: classificationSignature) { await classifySources() }
         }
     }
 
@@ -116,6 +130,35 @@ struct TodayView: View {
             .padding(.horizontal)
             .padding(.bottom, 24)
         }
+    }
+
+    /// Changes whenever the set of source documents, or any of their text,
+    /// could have changed.
+    private var classificationSignature: String {
+        let newest = memories.map(\.updatedAt.timeIntervalSince1970).max() ?? 0
+        return "\(entries.count)-\(memories.count)-\(Int(newest))"
+    }
+
+    /// What each referenced document is about, computed off the main actor.
+    private func classifySources() async {
+        let wanted = Set(entries.compactMap(\.sourceIdentifier))
+        guard !wanted.isEmpty else {
+            sourceRegions = [:]
+            return
+        }
+        let inputs = memories
+            .filter { wanted.contains($0.identifier) }
+            .map { BrainFileInput($0) }
+
+        let regions = await Task.detached(priority: .userInitiated) {
+            Dictionary(
+                inputs.compactMap { input in
+                    BrainClassifier.lexicalRegion(for: input).map { (input.id, $0) }
+                },
+                uniquingKeysWith: { first, _ in first }
+            )
+        }.value
+        sourceRegions = regions
     }
 
     private var header: some View {
@@ -167,7 +210,7 @@ struct TodayView: View {
 
         return VStack(spacing: 0) {
             cardHeader(group, count: lines.count, isOpen: isOpen)
-            cardRows(visible, sources: sources)
+            cardRows(visible, group: group, sources: sources)
             moreButton(group, hidden: hidden)
             caption(group, isOpen: isOpen)
         }
@@ -186,7 +229,11 @@ struct TodayView: View {
     }
 
     @ViewBuilder
-    private func cardRows(_ lines: [BriefEntry], sources: [UUID: MemoryItem]) -> some View {
+    private func cardRows(
+        _ lines: [BriefEntry],
+        group: BriefGroupKind,
+        sources: [UUID: MemoryItem]
+    ) -> some View {
         // `pair` rather than destructuring into `(index, entry)`: one less thing
         // for the checker to infer inside a builder.
         ForEach(Array(lines.enumerated()), id: \.element.identifier) { pair in
@@ -194,7 +241,7 @@ struct TodayView: View {
                 if pair.offset > 0 {
                     Divider().padding(.leading, 52)
                 }
-                row(pair.element, source: source(of: pair.element, in: sources))
+                row(pair.element, group: group, source: source(of: pair.element, in: sources))
             }
         }
     }
@@ -285,7 +332,7 @@ struct TodayView: View {
 
     /// One line: tick it off on the left, read it in the middle, open the note
     /// it came from by tapping the text.
-    private func row(_ entry: BriefEntry, source: MemoryItem?) -> some View {
+    private func row(_ entry: BriefEntry, group: BriefGroupKind, source: MemoryItem?) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Button {
                 close(entry)
@@ -306,16 +353,7 @@ struct TodayView: View {
                 }
             }
 
-            if let badge = BriefGrouping.badge(
-                scheduledAt: entry.scheduledAt,
-                day: entry.day,
-                today: today
-            ) {
-                Text(badge)
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(entry.scheduledAt == nil ? .secondary : Color.accentColor)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
+            chip(for: entry, in: group)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 11)
@@ -332,6 +370,38 @@ struct TodayView: View {
                 Label("Remove", systemImage: "trash")
             }
         }
+    }
+
+    /// The small right-hand chip.
+    ///
+    /// On a reminder it is *when* — the time today, the day this week, the date
+    /// otherwise, and red once it has gone by. Everywhere else it is how long
+    /// the line has waited, so a to-do from three days ago doesn't look like
+    /// this morning's.
+    @ViewBuilder
+    private func chip(for entry: BriefEntry, in group: BriefGroupKind) -> some View {
+        if group == .reminders, let due = due(for: entry) {
+            Text(due.label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(due.isPast ? Color.red : Color.orange)
+                .fixedSize(horizontal: true, vertical: false)
+        } else if let badge = BriefGrouping.badge(
+            scheduledAt: entry.scheduledAt,
+            day: entry.day,
+            today: today
+        ) {
+            Text(badge)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(entry.scheduledAt == nil ? .secondary : Color.accentColor)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    /// When a reminder falls due: the time the builder detected, or the day
+    /// the line itself names.
+    private func due(for entry: BriefEntry) -> BriefDue? {
+        let date = entry.scheduledAt ?? BriefGrouping.dueDate(in: entry.text, today: today)
+        return date.map { BriefGrouping.due(for: $0, today: today) }
     }
 
     /// The subject only. The full quote lives in the note — printing it here is
@@ -351,7 +421,7 @@ struct TodayView: View {
         EmptyStateView(
             systemImage: "sun.horizon",
             title: "Nothing for today yet",
-            message: "Your brief is built from what you capture. Note a meeting with a date on it, or record a discussion and save its summary, and it'll show up here tomorrow morning."
+            message: "Your brief is built from what you capture. Note something to do, a meeting with a date on it, or record a discussion and save its summary, and it'll be sorted into reminders, office and personal to-dos, and things worth remembering."
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -369,10 +439,20 @@ struct TodayView: View {
                 day: entry.day,
                 isClosed: entry.isClosed,
                 closedAt: entry.closedAt,
-                text: entry.subject,
+                // The full line, not the heading: the heading of a reminder has
+                // had its date taken off, and the date is what makes it one.
+                text: entry.text,
+                sourceRegion: entry.sourceIdentifier.flatMap { sourceRegions[$0] },
                 today: today
             ) else { continue }
             grouped[group, default: []].append(entry)
+        }
+
+        // Looked up once per reminder rather than once per comparison — the
+        // sort below would otherwise run the date detector n·log n times.
+        var dueDates: [UUID: Date] = [:]
+        for entry in grouped[.reminders] ?? [] {
+            dueDates[entry.identifier] = due(for: entry)?.date
         }
 
         // Snapshotted: mutating the dictionary while iterating its own keys view
@@ -380,12 +460,14 @@ struct TodayView: View {
         for group in Array(grouped.keys) {
             grouped[group]?.sort { lhs, rhs in
                 switch group {
-                case .priorities:
-                    // What's happening today first, in the order it happens;
-                    // then whatever has been waiting longest.
-                    if let left = lhs.scheduledAt, let right = rhs.scheduledAt { return left < right }
-                    if lhs.scheduledAt != nil { return true }
-                    if rhs.scheduledAt != nil { return false }
+                case .reminders:
+                    // Soonest first; anything with no readable date after
+                    // everything that has one.
+                    let left = dueDates[lhs.identifier]
+                    let right = dueDates[rhs.identifier]
+                    if let left, let right { return left == right ? lhs.day < rhs.day : left < right }
+                    if left != nil { return true }
+                    if right != nil { return false }
                     return lhs.day < rhs.day
                 case .done:
                     return (lhs.closedAt ?? .distantPast) > (rhs.closedAt ?? .distantPast)

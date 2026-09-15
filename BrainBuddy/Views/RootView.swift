@@ -55,6 +55,13 @@ struct RootView: View {
             // brief is built, so a task you dictated this morning can appear in
             // it straight away.
             await services.ingest.drainQuickCaptures(into: modelContext)
+            // Copies of the same document that got in before the app checked
+            // for them. Once per launch, a fingerprint compare over the
+            // library; when it trashes anything, the brief drops the lines
+            // that were quoting the copies.
+            if services.ingest.mergeDuplicates(in: modelContext) > 0 {
+                services.brief.reconcileAll(in: modelContext)
+            }
             services.collectPendingRequests()
         }
         // A Spotlight result for one of your memories opens that memory.

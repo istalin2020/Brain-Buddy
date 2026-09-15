@@ -111,6 +111,10 @@ final class BriefService {
         for candidate in candidates {
             let key = BriefEntry.dedupeKey(for: candidate.text)
             guard !known.blocks(candidate.kind, key: key) else { continue }
+            // A line that says what one of its memory's existing lines already
+            // says is the same line reworded, not a new one — see
+            // `BriefBuilder.distinctLinesPerSource`.
+            guard !known.restates(candidate) else { continue }
 
             context.insert(BriefEntry(
                 day: day,
@@ -204,13 +208,27 @@ final class BriefService {
         // Collapsing runs first, and hands back the survivors. Every pass below
         // reads properties off these objects, and reading a deleted model is not
         // something to find out about in the field.
-        let (entries, collapsed) = collapseDuplicates(fetched, in: context)
+        let (collapsedEntries, collapsed) = collapseDuplicates(fetched, in: context)
         var changed = collapsed
 
         let byIdentifier = Dictionary(
             memories.map { ($0.identifier, $0) },
             uniquingKeysWith: { first, _ in first }
         )
+
+        // A line whose document is gone — trashed, or merged away as a
+        // duplicate — has nothing left to be about, and leaving it is how the
+        // same thing kept showing up after its copy was removed. Open lines go
+        // with the document; a closed line is a record of something you did
+        // and stays.
+        var orphaned = Set<UUID>()
+        for entry in collapsedEntries where !entry.isClosed {
+            guard let identifier = entry.sourceIdentifier, byIdentifier[identifier] == nil else { continue }
+            orphaned.insert(entry.identifier)
+            context.delete(entry)
+        }
+        changed += orphaned.count
+        let entries = collapsedEntries.filter { !orphaned.contains($0.identifier) }
 
         var grouped: [UUID: [BriefEntry]] = [:]
         // Tokenized at most once per note, and only for notes that have lines.
@@ -261,32 +279,47 @@ final class BriefService {
         return changed
     }
 
-    /// Keeps one open line per memory per day, and removes the rest.
+    /// Keeps a few *distinct* open lines per memory, and removes the rest.
     ///
     /// One scanned meeting invitation used to produce five rows. `BriefBuilder`
     /// stops that happening again, but a brief built before it can't fix itself,
-    /// and those rows are exactly the ones cluttering the screen today. Closed
-    /// lines are never touched: ticking something off is a decision, and the
-    /// record of it is not a duplicate.
+    /// and those rows are exactly the ones cluttering the screen today. The
+    /// same rule as the builder's, applied to what is already stored: a line
+    /// that restates another from the same memory goes, and past the cap the
+    /// rest go too. Across every day, not per day — a line noticed on Monday
+    /// and the same thing reworded on Wednesday are one line.
+    ///
+    /// Closed lines are never touched: ticking something off is a decision, and
+    /// the record of it is not a duplicate.
     private func collapseDuplicates(
         _ entries: [BriefEntry],
         in context: ModelContext
     ) -> (kept: [BriefEntry], removed: Int) {
-        var bySource: [String: [BriefEntry]] = [:]
+        var bySource: [UUID: [BriefEntry]] = [:]
         for entry in entries where !entry.isClosed {
             guard let source = entry.sourceIdentifier else { continue }
-            let day = Int(calendar.startOfDay(for: entry.day).timeIntervalSince1970)
-            bySource["\(source.uuidString)-\(day)", default: []].append(entry)
+            bySource[source, default: []].append(entry)
         }
 
         var dropped = Set<UUID>()
         for group in bySource.values where group.count > 1 {
+            // What a morning needs first survives; between equals, the line
+            // that has been there longest keeps its history.
             let ordered = group.sorted { lhs, rhs in
                 let left = Self.rank(lhs.kind)
                 let right = Self.rank(rhs.kind)
-                return left == right ? lhs.sortIndex < rhs.sortIndex : left < right
+                if left != right { return left < right }
+                return lhs.day == rhs.day ? lhs.sortIndex < rhs.sortIndex : lhs.day < rhs.day
             }
-            for entry in ordered.dropFirst() {
+
+            var keptTerms: [Set<String>] = []
+            for entry in ordered {
+                let terms = Set(Tokenizer.tokens(in: entry.text))
+                let restated = keptTerms.contains { DiscussionSummarizer.restates(terms, $0) }
+                if !restated, keptTerms.count < BriefBuilder.linesPerSource {
+                    keptTerms.append(terms)
+                    continue
+                }
                 dropped.insert(entry.identifier)
                 context.delete(entry)
             }
@@ -507,6 +540,18 @@ final class BriefService {
         var today: Set<String> = []
         /// Everything in the look-back window, open or closed.
         var window: Set<String> = []
+        /// The words of every line in the window, by the memory it came from.
+        var termsBySource: [UUID: [Set<String>]] = [:]
+
+        /// Whether a memory already has a line saying this.
+        func restates(_ candidate: BriefCandidate) -> Bool {
+            guard let source = candidate.sourceIdentifier,
+                  let existing = termsBySource[source], !existing.isEmpty
+            else { return false }
+            let terms = Set(Tokenizer.tokens(in: candidate.text))
+            guard !terms.isEmpty else { return false }
+            return existing.contains { DiscussionSummarizer.restates(terms, $0) }
+        }
 
         func blocks(_ kind: BriefEntryKind, key: String) -> Bool {
             switch kind {
@@ -536,6 +581,9 @@ final class BriefService {
             let key = entry.dedupeKey
             known.window.insert(key)
             if calendar.isDate(entry.day, inSameDayAs: day) { known.today.insert(key) }
+            if let source = entry.sourceIdentifier {
+                known.termsBySource[source, default: []].append(Set(Tokenizer.tokens(in: entry.text)))
+            }
         }
         return known
     }

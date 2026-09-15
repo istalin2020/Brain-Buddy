@@ -125,40 +125,67 @@ enum BriefBuilder {
             claimed: &claimed
         )
 
-        return oneLinePerSource(schedule + tasks + points)
+        return distinctLinesPerSource(schedule + tasks + points)
     }
 
-    /// At most one line per memory, whichever section it lands in.
+    /// How many lines one memory may put in the brief.
+    ///
+    /// One was too few: a site email carries a deadline, a thing to send and a
+    /// figure to remember, and showing only the first of those is not a
+    /// summary, it is a sample. Three is about how many distinct things one
+    /// document is usually about; past that, it is a document, and the row
+    /// links to it.
+    static let linesPerSource = 3
+
+    /// A few lines per memory, each one saying something the others don't.
     ///
     /// One scanned meeting invitation produced five rows — *"How the session
     /// will run"*, *"Your jury round is scheduled"*, *"Bring you into the call
     /// one by one"*, and two more — which is one thing to do, reported five
-    /// times, pushing everything else off the screen. A brief is a list of
-    /// things, not a list of sentences.
+    /// times, pushing everything else off the screen. So a line only joins its
+    /// memory's set if it doesn't **restate** a line already in it, judged the
+    /// way the summarizer judges it: mostly the same words. And the set is
+    /// capped, because a brief is a list of things, not a list of sentences.
     ///
-    /// Which line survives is decided by section, in the order a morning
-    /// actually needs them: something happening today beats something to do,
-    /// which beats something to bear in mind. Within a section the first is
-    /// kept, and the sections already emit their best line first.
-    static func oneLinePerSource(_ candidates: [BriefCandidate]) -> [BriefCandidate] {
-        var best: [UUID: BriefCandidate] = [:]
+    /// Candidates are considered in the order a morning needs them — something
+    /// happening today, then something to do, then something to bear in mind —
+    /// so when a memory produces more than the cap, it is the third key point
+    /// that goes, never the deadline.
+    static func distinctLinesPerSource(
+        _ candidates: [BriefCandidate],
+        limit: Int = linesPerSource
+    ) -> [BriefCandidate] {
+        var kept: [UUID: [(candidate: BriefCandidate, terms: Set<String>)]] = [:]
         var order: [UUID] = []
         var unattributed: [BriefCandidate] = []
 
-        for candidate in candidates {
+        // A stable sort by section: the position in the input breaks ties, so
+        // within a section the builder's own order — earliest time, first
+        // sentence — is what survives.
+        let ranked = candidates.enumerated()
+            .sorted { lhs, rhs in
+                let left = rank(lhs.element.kind)
+                let right = rank(rhs.element.kind)
+                return left == right ? lhs.offset < rhs.offset : left < right
+            }
+            .map(\.element)
+
+        for candidate in ranked {
             guard let source = candidate.sourceIdentifier else {
                 unattributed.append(candidate)
                 continue
             }
-            guard let existing = best[source] else {
-                best[source] = candidate
-                order.append(source)
-                continue
-            }
-            if rank(candidate.kind) < rank(existing.kind) { best[source] = candidate }
+            let group = kept[source] ?? []
+            guard group.count < limit else { continue }
+
+            let terms = Set(Tokenizer.tokens(in: candidate.text))
+            guard !group.contains(where: { DiscussionSummarizer.restates(terms, $0.terms) }) else { continue }
+
+            if group.isEmpty { order.append(source) }
+            kept[source] = group + [(candidate: candidate, terms: terms)]
         }
 
-        return order.compactMap { best[$0] } + unattributed
+        return order.flatMap { kept[$0]?.map { $0.candidate } ?? [] } + unattributed
     }
 
     private static func rank(_ kind: BriefEntryKind) -> Int {

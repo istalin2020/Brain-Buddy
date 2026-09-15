@@ -25,6 +25,7 @@ struct SettingsView: View {
     @State private var pendingSharedItems = 0
     @State private var pendingQuickCaptures = 0
     @State private var spotlightNotice: String?
+    @State private var mergeNotice: String?
 
     var body: some View {
         NavigationStack {
@@ -330,10 +331,22 @@ struct SettingsView: View {
                     Label("Rebuild subjects and search indexes", systemImage: "arrow.clockwise")
                 }
             }
+
+            Button {
+                mergeDuplicateCaptures()
+            } label: {
+                Label("Merge duplicate captures", systemImage: "doc.on.doc")
+            }
+
+            if let mergeNotice {
+                Text(mergeNotice)
+                    .font(.caption)
+                    .foregroundStyle(Color.accentColor)
+            }
         } header: {
             Text("Maintenance")
         } footer: {
-            Text("Re-derives the subject of everything you haven't titled yourself and rebuilds the search index. Useful after restoring from iCloud on a new device, or if subjects and results look stale. Nothing is deleted, and titles you typed are left alone.")
+            Text("Rebuilding re-derives the subject of everything you haven't titled yourself and rebuilds the search index; nothing is deleted, and titles you typed are left alone. Merging finds the same document saved more than once — the same screenshot shared twice, a PDF imported again — keeps the oldest copy, and moves the rest to the trash. It also runs by itself each time the app opens.")
         }
     }
 
@@ -367,6 +380,21 @@ struct SettingsView: View {
             }
             services.search.invalidateCache()
             reindexProgress = nil
+        }
+    }
+
+    private func mergeDuplicateCaptures() {
+        let merged = services.ingest.mergeDuplicates(in: modelContext)
+        if merged > 0 {
+            // Lines quoting the copies come off the brief straight away.
+            services.brief.reconcileAll(in: modelContext)
+        }
+        if merged == 0 {
+            mergeNotice = "No duplicates found."
+        } else if merged == 1 {
+            mergeNotice = "1 duplicate moved to the trash."
+        } else {
+            mergeNotice = "\(merged) duplicates moved to the trash."
         }
     }
 

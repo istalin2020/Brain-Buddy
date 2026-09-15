@@ -186,11 +186,17 @@ final class BriefResyncTests: XCTestCase {
 
     /// One scanned invitation used to produce five rows. `BriefBuilder` stops
     /// that happening again; this is the clean-up for briefs built before it.
-    func testDuplicateRowsFromOneMemoryCollapseOnOpen() throws {
-        let item = insert("Your AI Hackathon jury round is on the tenth. You have to present your idea.")
+    func testRestatedRowsFromOneMemoryCollapseOnOpen() throws {
+        let lines = [
+            "Your jury round is scheduled",
+            "Your AI Hackathon jury round is scheduled for Wednesday"
+        ]
+        // The note says both, so whichever survives is still quoted from it
+        // and the pass has no other reason to touch it.
+        let item = insert(lines.joined(separator: ". ") + ".")
         let day = Calendar.current.startOfDay(for: Date())
 
-        for (index, text) in ["How the session will run", "Your jury round is scheduled"].enumerated() {
+        for (index, text) in lines.enumerated() {
             context.insert(
                 BriefEntry(
                     day: day,
@@ -207,8 +213,95 @@ final class BriefResyncTests: XCTestCase {
         brief.reconcileAll(in: context)
 
         let after = entries()
-        XCTAssertEqual(after.count, 1, "One memory, one open line")
-        XCTAssertEqual(after.first?.text, "How the session will run", "The first one is kept")
+        XCTAssertEqual(after.count, 1, "The same thing said twice is one line")
+        XCTAssertEqual(after.first?.text, "Your jury round is scheduled", "The first one is kept")
+    }
+
+    /// A memory may say more than one thing, and each thing keeps its row.
+    func testDistinctRowsFromOneMemorySurvive() throws {
+        let lines = [
+            "Send the revised drawings to the consultant",
+            "The rent for the yard accrues weekly",
+            "Close the PCH approval this week"
+        ]
+        let item = insert(lines.joined(separator: ". ") + ".")
+        let day = Calendar.current.startOfDay(for: Date())
+
+        for (index, text) in lines.enumerated() {
+            context.insert(
+                BriefEntry(day: day, kind: .task, text: text, sourceIdentifier: item.identifier, sortIndex: index)
+            )
+        }
+        try context.save()
+
+        brief.reconcileAll(in: context)
+        XCTAssertEqual(entries().count, 3)
+    }
+
+    /// Past the cap, the rest belong to the document rather than the brief.
+    func testRowsBeyondTheCapAreDropped() throws {
+        let lines = [
+            "Send the revised drawings to the consultant",
+            "The rent for the yard accrues weekly",
+            "Close the PCH approval this week",
+            "Book the roof survey for the tower site",
+            "Chase the invoice from the letting agency"
+        ]
+        let item = insert(lines.joined(separator: ". ") + ".")
+        let day = Calendar.current.startOfDay(for: Date())
+
+        for (index, text) in lines.enumerated() {
+            context.insert(
+                BriefEntry(day: day, kind: .task, text: text, sourceIdentifier: item.identifier, sortIndex: index)
+            )
+        }
+        try context.save()
+
+        brief.reconcileAll(in: context)
+        XCTAssertEqual(entries().count, BriefBuilder.linesPerSource)
+    }
+
+    /// Trash the document — or merge it away as a duplicate — and its open
+    /// lines go with it. That is what "the same entry keeps showing up" was.
+    func testAnOpenLineGoesWhenItsDocumentIsTrashed() throws {
+        let item = insert("Prepare the PPT for the hackathon")
+        brief.generate(in: context)
+        XCTAssertEqual(entries().count, 1)
+
+        item.isTrashed = true
+        try context.save()
+
+        brief.reconcileAll(in: context)
+        XCTAssertTrue(entries().isEmpty)
+    }
+
+    /// A closed line is a record of something you did; the document going
+    /// afterwards doesn't undo that.
+    func testAClosedLineStaysWhenItsDocumentIsTrashed() throws {
+        let item = insert("Prepare the PPT for the hackathon")
+        brief.generate(in: context)
+        let entry = try XCTUnwrap(entries().first)
+        brief.close(entry, in: context)
+
+        item.isTrashed = true
+        try context.save()
+
+        brief.reconcileAll(in: context)
+        XCTAssertEqual(entries().count, 1)
+    }
+
+    /// The builder now allows a few lines per memory; a rebuild must not use
+    /// that to add the same line back in different words.
+    func testARefreshDoesNotAddARestatementOfAnExistingLine() throws {
+        let item = insert("Your jury round is scheduled")
+        brief.generate(in: context)
+        XCTAssertEqual(entries().count, 1)
+
+        item.text = "Your jury round is scheduled. Your AI Hackathon jury round is scheduled for the slot above."
+        item.touch()
+        brief.generate(in: context)
+
+        XCTAssertEqual(entries().count, 1, "got \(entries().map(\.text))")
     }
 
     /// Ticking something off is a decision, and the record of it is not a

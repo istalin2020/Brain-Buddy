@@ -166,19 +166,19 @@ final class BriefBuilderTests: XCTestCase {
         XCTAssertFalse(BriefBuilder.namesADay("10:30:00"))
     }
 
-    // MARK: - One line per source
+    // MARK: - A few distinct lines per source
 
-    /// A scanned meeting invitation produced five rows — the jury round, the
-    /// schedule, how the session runs, and two restatements of the same thing.
-    /// That is one thing to know, reported five times, pushing everything else
-    /// off the screen.
-    func testOneMemoryProducesOneLine() {
+    /// A scanned meeting invitation produced five rows — the same thing to do,
+    /// reported five ways. One memory may put a few lines in the brief, but
+    /// each has to say something the others don't, and past three the rest
+    /// are the document's to keep.
+    func testOneMemoryProducesAFewDistinctLines() {
         let invitation = """
-        Your AI Hackathon jury round is on Wednesday.
-        We will bring you into the call one by one within the session.
-        Please join on time and stay available.
-        You have to present your idea to the jury panel.
-        The jury round is scheduled for the slot above.
+        You have to present your idea to the jury panel on the call.
+        You will have to present your idea to the jury panel.
+        We will bring you into the call one by one.
+        You need to keep your slides ready.
+        You must join the call on time.
         """
         let candidates = BriefBuilder.build(
             for: today,
@@ -192,7 +192,14 @@ final class BriefBuilderTests: XCTestCase {
             )],
             calendar: calendar
         )
-        XCTAssertEqual(candidates.count, 1, "got \(candidates.map(\.text))")
+        let texts = candidates.map(\.text)
+        XCTAssertEqual(candidates.count, BriefBuilder.linesPerSource, "got \(texts)")
+        XCTAssertEqual(
+            texts.filter { $0.contains("present your idea") }.count,
+            1,
+            "a restatement must not spend a second row: \(texts)"
+        )
+        XCTAssertFalse(texts.contains { $0.contains("join the call on time") }, "past the cap")
     }
 
     /// Two different notes still get a row each — the cap is per memory, not
@@ -209,16 +216,26 @@ final class BriefBuilderTests: XCTestCase {
         XCTAssertEqual(candidates.count, 2)
     }
 
-    /// When a memory could produce two kinds of line, the one a morning needs
-    /// first survives.
+    /// When a memory produces more than the cap, the one a morning needs first
+    /// survives.
     func testSomethingHappeningTodayOutranksSomethingToDo() throws {
-        let scheduled = BriefBuilder.oneLinePerSource([
-            BriefCandidate(kind: .point, text: "A point", headline: "", detail: "", scheduledAt: nil, sourceIdentifier: sharedSource),
-            BriefCandidate(kind: .schedule, text: "A meeting", headline: "", detail: "", scheduledAt: today, sourceIdentifier: sharedSource),
-            BriefCandidate(kind: .task, text: "A task", headline: "", detail: "", scheduledAt: nil, sourceIdentifier: sharedSource)
-        ])
+        let scheduled = BriefBuilder.distinctLinesPerSource([
+            BriefCandidate(kind: .point, text: "A point about the yard", headline: "", detail: "", scheduledAt: nil, sourceIdentifier: sharedSource),
+            BriefCandidate(kind: .schedule, text: "A meeting with the bank", headline: "", detail: "", scheduledAt: today, sourceIdentifier: sharedSource),
+            BriefCandidate(kind: .task, text: "A task for the office", headline: "", detail: "", scheduledAt: nil, sourceIdentifier: sharedSource)
+        ], limit: 1)
         XCTAssertEqual(scheduled.count, 1)
         XCTAssertEqual(try XCTUnwrap(scheduled.first).kind, .schedule)
+    }
+
+    /// Different things from one memory all survive, in the order a morning
+    /// needs them.
+    func testDistinctLinesFromOneMemoryAllSurvive() {
+        let kept = BriefBuilder.distinctLinesPerSource([
+            BriefCandidate(kind: .point, text: "The rent accrues weekly at the yard", headline: "", detail: "", scheduledAt: nil, sourceIdentifier: sharedSource),
+            BriefCandidate(kind: .task, text: "Close the PCH approval this week", headline: "", detail: "", scheduledAt: nil, sourceIdentifier: sharedSource)
+        ])
+        XCTAssertEqual(kept.map(\.kind), [.task, .point])
     }
 
     private var sharedSource: UUID { UUID(uuidString: "00000000-0000-0000-0000-0000000000aa") ?? UUID() }

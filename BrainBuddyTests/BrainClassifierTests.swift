@@ -105,6 +105,35 @@ final class BrainClassifierTests: XCTestCase {
         XCTAssertEqual(BrainClassifier.region(for: input(document)), .work)
     }
 
+    /// The vocabulary of the work this app's first users do — towers, cables,
+    /// insulators — is work, not General.
+    func testEngineeringVocabularyIsWork() {
+        XCTAssertEqual(BrainClassifier.region(for: input("Insulator damage on tower 42, stringing on hold")), .work)
+        XCTAssertEqual(BrainClassifier.region(for: input("Galvanisation reading for the spacer supply")), .work)
+    }
+
+    /// Correspondence is made of words nobody writes to their family.
+    func testCorrespondenceVocabularyIsWork() {
+        XCTAssertEqual(
+            BrainClassifier.region(for: input("Dear Sir, kindly find attached the clarification regarding the survey")),
+            .work
+        )
+    }
+
+    // MARK: - What it's about, whatever it is
+
+    /// The brain files a recording under the auditory cortex whatever it says;
+    /// the brief still needs to know the recording was about the tender.
+    func testARecordingAboutWorkIsStillAboutWork() {
+        let recording = input("We need to close the tender submission with the contractor", kind: .voice)
+        XCTAssertEqual(BrainClassifier.region(for: recording), .media)
+        XCTAssertEqual(BrainClassifier.lexicalRegion(for: recording), .work)
+    }
+
+    func testARecordingAboutNothingInParticularIsAboutNothing() {
+        XCTAssertNil(BrainClassifier.lexicalRegion(for: input("Sourdough starter, day four", kind: .voice)))
+    }
+
     // MARK: - Work's rooms
 
     func testAnAddressMakesItEmail() {
