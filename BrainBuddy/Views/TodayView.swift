@@ -203,7 +203,14 @@ struct TodayView: View {
     private func moreButton(_ group: BriefGroupKind, hidden: Int) -> some View {
         if hidden > 0 {
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) { expanded.insert(group) }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    // Discarded explicitly. `Set.insert` returns
+                    // `(inserted: Bool, memberAfterInsert: Element)`, and a
+                    // single-expression closure adopts its expression's type as
+                    // its return type — so `withAnimation` gets told its Result
+                    // is that tuple while the call site needs Void.
+                    _ = expanded.insert(group)
+                }
             } label: {
                 Text(group == .done ? "Show \(hidden)" : "+\(hidden) more")
                     .font(.footnote)
@@ -233,7 +240,14 @@ struct TodayView: View {
     private func cardHeader(_ group: BriefGroupKind, count: Int, isOpen: Bool) -> some View {
         Button {
             withAnimation(.easeInOut(duration: 0.2)) {
-                if isOpen { expanded.remove(group) } else { expanded.insert(group) }
+                // Both results discarded: `remove` hands back the old member and
+                // `insert` a tuple, and either one would become this closure's
+                // return type.
+                if isOpen {
+                    _ = expanded.remove(group)
+                } else {
+                    _ = expanded.insert(group)
+                }
             }
         } label: {
             HStack(spacing: 12) {
