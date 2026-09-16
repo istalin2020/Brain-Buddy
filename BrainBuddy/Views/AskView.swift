@@ -5,11 +5,12 @@ import SwiftUI
 /// through the answer, out of your own notes.
 ///
 /// It is a conversation, laid out the way every assistant people already use
-/// is laid out: the box is at the bottom, the keyboard lifts it, and the reply
-/// arrives above it as a message. Under every reply sit the **sources** it was
-/// built from — tap one and the note, photo or PDF opens. The reply is
-/// generated in *voice* only; every fact in it is a line quoted from something
-/// you saved, which is why the sources are always there to check.
+/// is laid out: the box is at the bottom, tapping into it lifts the keyboard,
+/// and each exchange reads **from the top down** — your question, then the
+/// reply, then the sources it was built from. Tap a source and the note, photo
+/// or PDF opens. The reply is generated in *voice* only; every fact in it is a
+/// line quoted from something you saved, which is why the sources are always
+/// there to check.
 ///
 /// Reading it *aloud* is a button, never automatic.
 @MainActor
@@ -29,14 +30,24 @@ struct AskView: View {
 
     @State private var query = ""
     @State private var turns: [AskTurn] = []
-    /// The moment between sending and the reply landing. Search itself takes
-    /// milliseconds; the pause is so the reply arrives as a message rather than
-    /// the screen flickering into a new state under your thumb.
-    @State private var isThinking = false
     @State private var errorMessage: String?
+    @State private var speakingTurn: UUID?
+
+    /// The exchange to bring to the top of the screen, and a counter that makes
+    /// the same target scrollable twice.
+    ///
+    /// A plain `onChange` of the identifier fires once and then never again for
+    /// the same value, which is exactly wrong here: the question is scrolled to
+    /// when it is asked, and to the *same* place again when its answer lands.
+    @State private var scrollTarget: UUID?
+    @State private var scrollToken = 0
+
     @FocusState private var isFieldFocused: Bool
 
     private var transcriber: SpeechTranscriber { services.transcriber }
+
+    /// True between sending a question and its reply landing.
+    private var isAwaitingReply: Bool { turns.contains { $0.answer == nil } }
 
     var body: some View {
         NavigationStack {
@@ -79,6 +90,14 @@ struct AskView: View {
 
     // MARK: - The conversation
 
+    /// One block per exchange, each block reading question → reply → sources.
+    ///
+    /// The block carries the identifier, so scrolling to an exchange puts its
+    /// **question** at the top of the screen and everything else flows down
+    /// from there. Scrolling to the bottom instead — which is what a chat app
+    /// does while a reply streams in word by word — lands you at the *end* of
+    /// a reply that arrived all at once, looking at the source rows with the
+    /// question somewhere above the fold.
     private var conversation: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -87,36 +106,35 @@ struct AskView: View {
                         welcome
                     }
                     ForEach(turns) { turn in
-                        questionBubble(turn.question)
-                        replyBubble(turn)
+                        VStack(alignment: .leading, spacing: 14) {
+                            questionBubble(turn.question)
+                            if let answer = turn.answer {
+                                replyBubble(turn, answer: answer)
+                            } else {
+                                thinkingBubble
+                            }
+                        }
+                        .id(turn.id)
                     }
-                    if isThinking {
-                        thinkingBubble
-                    }
-                    // Something to scroll to that is always the last thing.
-                    Color.clear
-                        .frame(height: 1)
-                        .id(Self.bottomAnchor)
                 }
                 .padding(.horizontal)
                 .padding(.top, 12)
                 .padding(.bottom, 8)
             }
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: turns.count) { _, _ in scrollToBottom(proxy) }
-            .onChange(of: isThinking) { _, _ in scrollToBottom(proxy) }
-            .onChange(of: isFieldFocused) { _, focused in
-                if focused { scrollToBottom(proxy) }
+            .onChange(of: scrollToken) { _, _ in
+                guard let scrollTarget else { return }
+                withAnimation(.easeOut(duration: 0.28)) {
+                    proxy.scrollTo(scrollTarget, anchor: .top)
+                }
             }
         }
     }
 
-    private static let bottomAnchor = "bottom"
-
-    private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        withAnimation(.easeOut(duration: 0.25)) {
-            proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
-        }
+    /// Brings one exchange to the top of the screen.
+    private func bringToTop(_ id: UUID) {
+        scrollTarget = id
+        scrollToken += 1
     }
 
     /// The empty conversation: what this is, in two lines.
@@ -133,7 +151,7 @@ struct AskView: View {
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 48)
+        .padding(.top, 40)
         .padding(.horizontal, 12)
     }
 
@@ -151,13 +169,13 @@ struct AskView: View {
 
     /// The reply: what was found, walked through; then the sources it came
     /// from, each a link to the original; then Read aloud.
-    private func replyBubble(_ turn: AskTurn) -> some View {
+    private func replyBubble(_ turn: AskTurn, answer: AnswerComposer.Answer) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Brain Buddy", systemImage: "sparkles")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Color.accentColor)
 
-            Text(Self.markdown(turn.answer.written))
+            Text(Self.markdown(answer.written))
                 .font(.body)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -166,8 +184,8 @@ struct AskView: View {
                 sourcesList(turn)
             }
 
-            if turn.answer.hasResults {
-                readAloudButton(turn)
+            if answer.hasResults {
+                readAloudButton(turn, answer: answer)
             }
         }
         .padding(14)
@@ -233,7 +251,7 @@ struct AskView: View {
 
     /// Reading aloud is an action you take on an answer you can already see —
     /// not something that happens the moment results arrive.
-    private func readAloudButton(_ turn: AskTurn) -> some View {
+    private func readAloudButton(_ turn: AskTurn, answer: AnswerComposer.Answer) -> some View {
         let isSpeakingThis = services.speaker.isSpeaking && speakingTurn == turn.id
         return Button {
             if isSpeakingThis {
@@ -241,7 +259,7 @@ struct AskView: View {
                 speakingTurn = nil
             } else {
                 speakingTurn = turn.id
-                services.speaker.speak(turn.answer.spoken)
+                services.speaker.speak(answer.spoken)
             }
         } label: {
             Label(
@@ -256,8 +274,6 @@ struct AskView: View {
         .buttonStyle(.plain)
     }
 
-    @State private var speakingTurn: UUID?
-
     private var thinkingBubble: some View {
         HStack(spacing: 10) {
             ProgressView()
@@ -271,9 +287,9 @@ struct AskView: View {
 
     // MARK: - The composer
 
-    /// The bottom of the screen: suggestions when there is nothing to say
-    /// yet, then the box and the microphone. Sits inside the safe area, so the
-    /// keyboard lifts the whole thing.
+    /// The bottom of the screen: the suggestions while the conversation is
+    /// empty, then the box and the microphone. Sits inside the safe area, so
+    /// the keyboard lifts the whole thing.
     private var composer: some View {
         VStack(spacing: 10) {
             if showsSuggestions {
@@ -290,13 +306,15 @@ struct AskView: View {
         .animation(.easeInOut(duration: 0.2), value: transcriber.isListening)
     }
 
-    /// Before the first question the suggestions are always there; after it
-    /// they come back when you tap into the box with nothing typed — the
-    /// moment you are deciding what to ask next.
+    /// Only while there is nothing to read.
+    ///
+    /// They used to come back whenever you tapped an empty box, which put five
+    /// rows of "try asking" between the keyboard and the answer you had just
+    /// asked for — the reply gets a third of the screen and the suggestions
+    /// get the rest. Once a conversation exists, the space belongs to it;
+    /// *New conversation* brings the suggestions back.
     private var showsSuggestions: Bool {
-        guard !transcriber.isListening, !isThinking else { return false }
-        if turns.isEmpty { return true }
-        return isFieldFocused && query.isEmpty
+        turns.isEmpty && !transcriber.isListening
     }
 
     private var suggestionList: some View {
@@ -442,8 +460,13 @@ struct AskView: View {
         }
     }
 
-    /// Asks one question: your message goes up, the box empties, and the reply
-    /// follows.
+    /// Asks one question.
+    ///
+    /// Your question appears **immediately**, at the top of the screen, and
+    /// the reply fills in underneath it. It used to be held back until the
+    /// reply was ready, so pressing send emptied the box and showed nothing
+    /// at all for a moment — and then landed you at the bottom of an answer
+    /// you hadn't read the beginning of.
     ///
     /// Searching is explicit — on send, on a voice result, or from a
     /// suggestion — rather than debounced on every keystroke. A box that
@@ -451,19 +474,25 @@ struct AskView: View {
     /// type it.
     private func ask(_ question: String) {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isThinking else { return }
+        guard !trimmed.isEmpty, !isAwaitingReply else { return }
 
         services.speaker.stop()
         query = ""
-        isThinking = true
+        // The answer is the point, and it is taller than the third of a screen
+        // the keyboard would leave it.
+        isFieldFocused = false
+
+        let turn = AskTurn(question: trimmed)
+        turns.append(turn)
+        bringToTop(turn.id)
 
         let hits = services.search.search(query: trimmed, in: memories, limit: 30)
         let terms = Tokenizer.queryTokens(in: trimmed)
-        let sources = Array(hits.prefix(Self.sourcesPerReply))
+        let quoted = Array(hits.prefix(Self.sourcesPerReply))
 
         let composed = AnswerComposer.compose(
             query: trimmed,
-            sources: sources.map { hit in
+            sources: quoted.map { hit in
                 AnswerSource(
                     identifier: hit.item.identifier,
                     title: hit.item.displayTitle,
@@ -485,12 +514,19 @@ struct AskView: View {
 
         // Everything that matched is listed, not only what the reply quoted:
         // the sixth match may be the one you were thinking of.
-        let turn = AskTurn(question: trimmed, answer: composed, sources: Array(hits.prefix(Self.sourcesListed)))
+        let sources = Array(hits.prefix(Self.sourcesListed))
 
         Task {
+            // Long enough for the question to land and the spinner to be seen
+            // as a reply being prepared, rather than the screen changing under
+            // your thumb.
             try? await Task.sleep(nanoseconds: 350_000_000)
-            turns.append(turn)
-            isThinking = false
+            guard let index = turns.firstIndex(where: { $0.id == turn.id }) else { return }
+            turns[index].answer = composed
+            turns[index].sources = sources
+            // Held at the top again: the reply grew underneath the question,
+            // and the question is where reading starts.
+            bringToTop(turn.id)
 
             // Only when the user has explicitly turned automatic reading on.
             if speakAnswers, composed.hasResults {
@@ -509,9 +545,12 @@ struct AskView: View {
 
 /// One exchange: what you asked and what came back, with the memories the
 /// reply was built from so the rows under it can open them.
+///
+/// The answer is optional because the question goes on screen the instant you
+/// send it; `nil` is the moment in between, drawn as the spinner.
 struct AskTurn: Identifiable {
     let id = UUID()
     let question: String
-    let answer: AnswerComposer.Answer
-    let sources: [SearchHit]
+    var answer: AnswerComposer.Answer?
+    var sources: [SearchHit] = []
 }

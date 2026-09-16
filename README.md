@@ -555,14 +555,27 @@ it's about, and ranking already applies a recency boost.
 
 **It's a conversation.** Ask is laid out the way every assistant people
 already use is laid out: the box is at the bottom, tapping into it lifts the
-keyboard and the box with it, and the suggestions rise with them — two stock
-questions and then questions about what you saved most recently, because a
-suggestion that names your own note is one you can tap without thinking. Your
-question goes up as a message, *Looking through your brain…* shows for a
-moment, and the reply lands under it. One button on the right does three
-jobs: the microphone when the box is empty, **Send** once you've typed, and
-**Stop** while it's listening (the live transcript shows in the box as you
-speak). *New conversation* in the toolbar clears the thread.
+keyboard and the box with it, and while the thread is still empty the
+suggestions sit just above them — two stock questions and then questions about
+what you saved most recently, because a suggestion that names your own note is
+one you can tap without thinking. One button on the right does three jobs: the
+microphone when the box is empty, **Send** once you've typed, and **Stop**
+while it's listening (the live transcript shows in the box as you speak).
+*New conversation* in the toolbar clears the thread and brings the suggestions
+back.
+
+**Each exchange reads from the top down.** Press send and your question
+appears immediately at the top of the screen, with *Looking through your
+brain…* under it, and the reply fills in below that. Two things had to be
+true for it to read in that order. The question goes up the instant you send
+it rather than being held back until the reply is ready, so pressing send
+can't empty the box and show nothing at all. And the screen scrolls to the
+**question**, not to the bottom: scrolling to the bottom is what a chat app
+does while a reply streams in word by word, but this reply arrives all at
+once, so it landed you at the *end* of it, looking at the source rows with the
+question somewhere above the fold. The suggestions also stay hidden once a
+thread exists — five rows of "try asking" between the keyboard and the answer
+you just asked for left the answer a third of the screen.
 
 **The reply talks you through what it found.** *"Here's what I have on the
 insulator damage — 3 things in your brain mention it. Going through them:"*
