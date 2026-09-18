@@ -5,8 +5,12 @@ import VisionKit
 /// correction and multi-page capture far better than a raw camera shot — and
 /// straight pages make OCR dramatically more accurate.
 struct DocumentScannerView: UIViewControllerRepresentable {
-    var onFinish: ([UIImage]) -> Void
-    var onCancel: () -> Void
+    /// Declared `@MainActor` because that is the truth: VisionKit delivers these
+    /// callbacks on the main thread, and the handlers touch view state and the
+    /// model context. Saying so lets the call site stay ordinary SwiftUI instead
+    /// of hopping actors by hand.
+    var onFinish: @MainActor ([UIImage]) -> Void
+    var onCancel: @MainActor () -> Void
 
     /// The scanner needs a real camera; the Simulator has none.
     static var isSupported: Bool { VNDocumentCameraViewController.isSupported }
@@ -24,14 +28,20 @@ struct DocumentScannerView: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: VNDocumentCameraViewController, context: Context) {}
 
     final class Coordinator: NSObject, VNDocumentCameraViewControllerDelegate {
-        private let onFinish: ([UIImage]) -> Void
-        private let onCancel: () -> Void
+        private let onFinish: @MainActor ([UIImage]) -> Void
+        private let onCancel: @MainActor () -> Void
 
-        init(onFinish: @escaping ([UIImage]) -> Void, onCancel: @escaping () -> Void) {
+        init(
+            onFinish: @escaping @MainActor ([UIImage]) -> Void,
+            onCancel: @escaping @MainActor () -> Void
+        ) {
             self.onFinish = onFinish
             self.onCancel = onCancel
         }
 
+        // VisionKit guarantees main-thread delivery for these, so asserting the
+        // isolation is accurate — and it keeps the handlers synchronous, which
+        // matters for `onCancel`: dismissing a sheet a run loop late is visible.
         func documentCameraViewController(
             _ controller: VNDocumentCameraViewController,
             didFinishWith scan: VNDocumentCameraScan
@@ -40,18 +50,18 @@ struct DocumentScannerView: UIViewControllerRepresentable {
             for index in 0..<scan.pageCount {
                 pages.append(scan.imageOfPage(at: index))
             }
-            onFinish(pages)
+            MainActor.assumeIsolated { onFinish(pages) }
         }
 
         func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) {
-            onCancel()
+            MainActor.assumeIsolated { onCancel() }
         }
 
         func documentCameraViewController(
             _ controller: VNDocumentCameraViewController,
             didFailWithError error: Error
         ) {
-            onCancel()
+            MainActor.assumeIsolated { onCancel() }
         }
     }
 }

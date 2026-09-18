@@ -22,6 +22,23 @@ struct SearchHit: Identifiable {
 }
 
 extension SearchEngine {
+    /// Drops matches far weaker than the best one.
+    ///
+    /// Ranking always returns *something*: ask what's on your purchase list
+    /// and a meeting invitation still scores, because a word or two overlaps
+    /// somewhere in it. That is fine for a results page, where a weak match at
+    /// position nine costs a glance, and wrong under an answer, where every
+    /// row reads as "this is part of what you asked for".
+    ///
+    /// Relative to the best match rather than an absolute number, because
+    /// scores are fused and normalized per query — there is no fixed value
+    /// that means "good" across different questions. The best match always
+    /// survives.
+    static func confident(_ hits: [SearchHit], floor: Double = AnswerComposer.relevanceFloor) -> [SearchHit] {
+        guard let best = hits.map(\.score).max(), best > 0 else { return hits }
+        return hits.filter { $0.score >= best * floor }
+    }
+
     /// Bridges stored memories into the pure ranking layer and back.
     func search(query: String, in items: [MemoryItem], limit: Int = 30) -> [SearchHit] {
         let live = items.filter { !$0.isTrashed }

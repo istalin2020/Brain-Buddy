@@ -24,7 +24,15 @@ struct CaptureView: View {
     @State private var showFileImporter = false
     @State private var photoSelections: [PhotosPickerItem] = []
     @State private var errorMessage: String?
+    /// The draft as it stood when dictation started. Non-nil exactly while *this*
+    /// screen owns the recognizer, which is also how the UI knows to show itself
+    /// as listening — `transcriber.isListening` alone would light up while the
+    /// Ask tab is the one holding the microphone.
+    @State private var dictationBase: String?
     @FocusState private var isEditorFocused: Bool
+
+    private var transcriber: SpeechTranscriber { services.transcriber }
+    private var isDictating: Bool { dictationBase != nil }
 
     private var recentMemories: [MemoryItem] { Array(memories.prefix(4)) }
 
@@ -35,19 +43,19 @@ struct CaptureView: View {
                     editor
                     captureButtons
                     if services.ingest.isBusy { progressBanner }
+                    if let notice = services.ingest.lastNotice { noticeBanner(notice) }
                     recentSection
                 }
                 .padding()
             }
-            .navigationTitle("Capture")
+            .navigationTitle("Input")
             .navigationDestination(for: MemoryItem.self) { item in
                 MemoryDetailView(item: item)
             }
+            // No Save in the toolbar. Saving belongs on the ↑ button inside the
+            // box, next to the mic — the two things you do to a draft, in the
+            // place you are already looking.
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") { saveDraft() }
-                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
                 ToolbarItem(placement: .topBarLeading) {
                     if isEditorFocused {
                         Button("Done") { isEditorFocused = false }
@@ -61,7 +69,7 @@ struct CaptureView: View {
                 DocumentScannerView(
                     onFinish: { pages in
                         showScanner = false
-                        Task { await services.ingest.saveScan(pages: pages, in: modelContext) }
+                        Task { await services.ingest.capture(scan: pages, in: modelContext) }
                     },
                     onCancel: { showScanner = false }
                 )
@@ -86,6 +94,16 @@ struct CaptureView: View {
                 guard !newValue.isEmpty else { return }
                 importPhotos(newValue)
             }
+            // Words appear in the note as they're recognized, rather than in a
+            // separate preview that gets copied over at the end.
+            .onChange(of: transcriber.liveTranscript) { _, spoken in
+                // The `isListening` half matters on the way out: cancelling
+                // blanks the live transcript, and without this the blank would
+                // be merged in and wipe what was just dictated.
+                guard let base = dictationBase, transcriber.isListening else { return }
+                draft = Self.appending(spoken, to: base)
+            }
+            .onDisappear { if isDictating { transcriber.cancelListening() } }
             .onChange(of: services.ingest.lastError) { _, newValue in
                 errorMessage = newValue
             }
@@ -110,20 +128,42 @@ struct CaptureView: View {
     private var editor: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .topLeading) {
-                if draft.isEmpty {
-                    Text("What do you want to remember?\nTip: add #tags anywhere in the text.")
+                if draft.isEmpty, !isDictating {
+                    Text("What do you want to remember?\nType it, or tap the mic to speak it.\nTip: add #tags anywhere in the text.")
                         .foregroundStyle(.tertiary)
                         .padding(.top, 8)
                         .padding(.leading, 5)
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: $draft)
-                    .frame(minHeight: 160)
+                    // Trimmed to pay for the taller mic below it, so the box as
+                    // a whole didn't grow back.
+                    .frame(minHeight: 104)
                     .scrollContentBackground(.hidden)
                     .focused($isEditorFocused)
             }
             .padding(8)
+            // Room along the bottom edge for the two controls, so growing text
+            // never slides under them.
+            .padding(.bottom, 46)
             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            // One row rather than corner overlays, so a long status line can
+            // never slide under the buttons.
+            .overlay(alignment: .bottom) {
+                HStack(spacing: 2) {
+                    dictationStatus
+                    Spacer(minLength: 0)
+                    micButton
+                    commitButton
+                }
+                .padding(.leading, 12)
+                .padding(.trailing, 4)
+            }
+            .animation(.easeInOut(duration: 0.2), value: isDictating)
+
+            Text("Mic types what you say. Tap ✓ to take the words, correct anything, then ↑ to save. “Voice note” below keeps the recording itself.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
 
             if !TextAnalysis.hashtags(in: draft).isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -134,6 +174,71 @@ struct CaptureView: View {
                     }
                 }
             }
+        }
+    }
+
+    /// Left of the pair: starts dictating, and shows that it is.
+    ///
+    /// While listening it is a waveform, and tapping it finishes the same way the
+    /// tick does. Two ways to stop is deliberate — there is no gesture here that
+    /// can lose words you have already spoken.
+    private var micButton: some View {
+        Button(action: toggleDictation) {
+            Image(systemName: isDictating ? "waveform.circle.fill" : "mic.circle.fill")
+                // Sized to be hit without looking, mid-thought, one-handed.
+                .font(.system(size: 34))
+                .symbolEffect(.pulse, isActive: isDictating)
+                .foregroundStyle(isDictating ? Color.red : Color.accentColor)
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(.plain)
+        .padding(6)
+        .disabled(services.ingest.isBusy)
+        .accessibilityLabel(isDictating ? "Stop listening" : "Dictate into this note")
+    }
+
+    /// Right of the pair, and it means one thing at a time.
+    ///
+    /// **✓ while listening**: take the words into the box. **↑ otherwise**: save
+    /// the note. Those are two separate decisions — accepting a transcript is not
+    /// the same as being finished with the thought — and running them together is
+    /// how a dictated note gets saved before you have had a chance to fix the one
+    /// word the recognizer got wrong.
+    private var commitButton: some View {
+        Button(action: commit) {
+            Image(systemName: isDictating ? "checkmark.circle.fill" : "arrow.up.circle.fill")
+                .font(.system(size: 34))
+                .foregroundStyle(canCommit ? Color.accentColor : Color.secondary.opacity(0.4))
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(.plain)
+        .padding(6)
+        .disabled(!canCommit)
+        .accessibilityLabel(isDictating ? "Accept what you said" : "Save this note")
+    }
+
+    /// Accepting is always available while listening — even before any words
+    /// arrive, because stopping has to work. Saving needs something to save.
+    private var canCommit: Bool {
+        if isDictating { return true }
+        guard !services.ingest.isBusy else { return false }
+        return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    @ViewBuilder
+    private var dictationStatus: some View {
+        if isDictating {
+            HStack(spacing: 6) {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                Text(transcriber.liveTranscript.isEmpty
+                     ? "Listening…"
+                     : "Pause as long as you like · tap ✓ when done")
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .transition(.opacity)
         }
     }
 
@@ -170,6 +275,33 @@ struct CaptureView: View {
         }
         .buttonStyle(.plain)
         .disabled(services.ingest.isBusy)
+    }
+
+    /// A duplicate isn't a failure, so it doesn't get an alert. It gets a line
+    /// that says what happened and goes away when you dismiss it — because the
+    /// alternative, silently saving a fourth copy of the same screenshot, is
+    /// what filled the library up.
+    private func noticeBanner(_ notice: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle")
+                .foregroundStyle(Color.accentColor)
+            Text(notice)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button {
+                services.ingest.clearNotice()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var progressBanner: some View {
@@ -210,11 +342,92 @@ struct CaptureView: View {
 
     // MARK: - Actions
 
+    // These go through `IngestService.capture(…)` rather than `save*`: the view
+    // has no use for the created model, and the `capture` overloads return
+    // `Void` so no SwiftData model ever becomes a `Task`'s result type. This
+    // view is `@MainActor`, so the tasks inherit that isolation.
+
+    /// One button, one meaning at a time: take the words, or save the note.
+    private func commit() {
+        if isDictating {
+            // Ends audio capture and keeps everything recognized so far. The
+            // recognizer's final, better-punctuated pass lands a moment later
+            // through `onFinalTranscript` and replaces what is on screen.
+            transcriber.stopListening()
+            return
+        }
+        saveDraft()
+    }
+
     private func saveDraft() {
+        // Saving mid-dictation must not drop the words already recognized but not
+        // yet merged into the draft, so take them explicitly before cancelling.
+        if let base = dictationBase {
+            draft = Self.appending(transcriber.liveTranscript, to: base)
+            transcriber.cancelListening()
+        }
         let text = draft
         draft = ""
         isEditorFocused = false
-        Task { await services.ingest.saveNote(text: text, in: modelContext) }
+        // Clear last time's notice so the one this capture produces — or the
+        // absence of one — is unambiguous.
+        services.ingest.clearNotice()
+        Task { await services.ingest.capture(text: text, in: modelContext) }
+    }
+
+    // MARK: - Dictation
+
+    /// Speaks into the note itself, as opposed to the "Voice note" button, which
+    /// keeps the audio as a memory of its own. Both are useful and they are not
+    /// the same thing: this one is a keyboard, that one is a recording.
+    private func toggleDictation() {
+        if isDictating {
+            // Ends audio capture; the recognizer's final, punctuated pass lands
+            // a moment later through `onFinalTranscript`.
+            transcriber.stopListening()
+            return
+        }
+        // The Ask tab holds the microphone. Leave it alone rather than fighting
+        // over one recognizer.
+        guard !transcriber.isListening else {
+            errorMessage = "Dictation is already running on the Ask tab. Stop it there first."
+            return
+        }
+
+        let base = draft
+        dictationBase = base
+        isEditorFocused = false
+
+        transcriber.onFinalTranscript = { spoken in
+            // The final pass is better punctuated than the partial results, so it
+            // replaces rather than appends to what's on screen.
+            draft = Self.appending(spoken, to: base)
+        }
+        transcriber.onSessionEnd = { dictationBase = nil }
+
+        Task {
+            do {
+                try await transcriber.startListening(autoStop: false)
+                // Starting is asynchronous — it may wait on a permission prompt —
+                // and a tab change ends the session in the meantime. If that
+                // happened, don't leave a recognizer running with no owner.
+                if dictationBase == nil { transcriber.cancelListening() }
+            } catch {
+                dictationBase = nil
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Joins dictated text onto the draft, inserting a space only where one is
+    /// actually missing — so speaking twice doesn't run words together, and
+    /// doesn't leave a gap after a newline either.
+    static func appending(_ spoken: String, to base: String) -> String {
+        let addition = spoken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !addition.isEmpty else { return base }
+        guard !base.isEmpty else { return addition }
+        let separator = (base.last?.isWhitespace ?? false) ? "" : " "
+        return base + separator + addition
     }
 
     private func importPhotos(_ selections: [PhotosPickerItem]) {
@@ -223,7 +436,7 @@ struct CaptureView: View {
             for selection in selections {
                 guard let data = try? await selection.loadTransferable(type: Data.self),
                       let image = UIImage(data: data) else { continue }
-                await services.ingest.saveImage(image, source: "Photo", in: modelContext)
+                await services.ingest.capture(image: image, source: "Photo", in: modelContext)
             }
         }
     }
@@ -233,7 +446,7 @@ struct CaptureView: View {
         case .success(let urls):
             Task {
                 for url in urls {
-                    await services.ingest.saveFile(at: url, in: modelContext)
+                    await services.ingest.capture(fileAt: url, in: modelContext)
                 }
             }
         case .failure(let error):
