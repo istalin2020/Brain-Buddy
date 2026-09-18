@@ -486,7 +486,10 @@ struct AskView: View {
         turns.append(turn)
         bringToTop(turn.id)
 
-        let hits = services.search.search(query: trimmed, in: memories, limit: 30)
+        // Weak matches are dropped before anything is shown. A question about
+        // a purchase list should not list a meeting invitation underneath the
+        // answer, however politely.
+        let hits = SearchEngine.confident(services.search.search(query: trimmed, in: memories, limit: 30))
         let terms = Tokenizer.queryTokens(in: trimmed)
         let quoted = Array(hits.prefix(Self.sourcesPerReply))
 
@@ -509,10 +512,10 @@ struct AskView: View {
                     score: hit.score
                 )
             },
-            totalMatches: hits.count
+            totalMatches: min(hits.count, Self.sourcesListed)
         )
 
-        // Everything that matched is listed, not only what the reply quoted:
+        // Every match worth having is listed, not only what the reply quoted:
         // the sixth match may be the one you were thinking of.
         let sources = Array(hits.prefix(Self.sourcesListed))
 

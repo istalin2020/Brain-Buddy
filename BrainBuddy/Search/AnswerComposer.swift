@@ -8,7 +8,8 @@ struct AnswerSource {
     /// The one line that answers the question.
     let snippet: String
     /// The lines that bear on it, in reading order — see
-    /// `SearchEngine.relevantLines`. Empty means "just the snippet".
+    /// `SearchEngine.relevantLines`. Empty means no line in this document
+    /// carries a word from the question.
     let lines: [String]
     let createdAt: Date
     let kindTitle: String
@@ -39,9 +40,25 @@ struct AnswerSource {
 /// it is **quoted**. That is not a limitation dressed up as a feature: an
 /// assistant that paraphrases your notes can tell you the invoice was 54,000
 /// when the note says 60,000, and you would have no way of knowing. So the
-/// voice is generated — the "here's what I have", the "going through them",
-/// the "worth noting" — and the facts are your own words, lifted whole, with
-/// the source named under each so you can open it and check.
+/// voice is generated — the "here's what I have", the "worth noting" — and the
+/// facts are your own words, lifted whole, with the source named under each so
+/// you can open it and check.
+///
+/// **What it refuses to say is as important as what it says.** Three rules,
+/// each one written against a row that actually appeared on screen:
+///
+/// - **Nothing that doesn't bear on the question.** Ranking always returns
+///   something, so asking for a purchase list surfaced a meeting invitation
+///   and a voice memo about a phone balance. A result has to score within
+///   reach of the best one *and* have something to contribute before it is
+///   presented as part of an answer.
+/// - **Never a line picked at random.** When no line of a document carries a
+///   word from the question, the answer used to fall back to that document's
+///   snippet — which is how a question about shopping was answered with
+///   "Because I have only six hours balance". A document with nothing to say
+///   about the question now says nothing.
+/// - **Never the same sentence twice.** A note called "Purchase a black belt"
+///   whose only line is "Purchase a black belt" is one fact, printed once.
 ///
 /// Entirely offline, as the rest of the app is.
 enum AnswerComposer {
@@ -70,6 +87,15 @@ enum AnswerComposer {
     /// How many details are called out at the end.
     static let maximumDetails = 6
 
+    /// One source and what it has to say about the question.
+    private struct Passage {
+        let source: AnswerSource
+        /// Already cleaned, de-duplicated, and free of anything that merely
+        /// restates the source's own name. May be empty, when the name itself
+        /// is the whole answer.
+        let lines: [String]
+    }
+
     static func compose(
         query: String,
         sources: [AnswerSource],
@@ -78,8 +104,10 @@ enum AnswerComposer {
     ) -> Answer {
         let cleanQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let topic = subject(of: cleanQuery)
+        let terms = Set(Tokenizer.queryTokens(in: cleanQuery))
+        let passages = self.passages(in: sources, terms: terms)
 
-        guard !sources.isEmpty else {
+        guard !passages.isEmpty else {
             let miss = cleanQuery.isEmpty
                 ? "Ask me anything you have saved."
                 : "I couldn't find anything about \(topic) in your brain yet. Try other words for it, or capture it first and ask again."
@@ -90,51 +118,63 @@ enum AnswerComposer {
         var spoken: [String] = []
 
         // The opening: what was found, and how much of it.
-        let count = sources.count
-        let extra = max(0, (totalMatches ?? count) - count)
-        if count == 1, let only = sources.first {
-            let lead = "Here's what I have on \(topic). It comes from one \(only.kindTitle.lowercased()), saved \(relativeDescription(for: only.createdAt, now: now))."
+        let count = passages.count
+        if count == 1, let only = passages.first {
+            let lead = "Here's what I have on \(topic). It's in one \(only.source.kindTitle.lowercased()), saved \(relativeDescription(for: only.source.createdAt, now: now))."
             written.append(lead)
             spoken.append(lead)
         } else {
-            let lead = "Here's what I have on \(topic) — \(count) things in your brain mention it. Going through them:"
+            let lead = "Here's what I have on \(topic). \(count) things in your brain mention it:"
             written.append(lead)
             spoken.append("Here's what I have on \(topic). \(count) things in your brain mention it.")
         }
 
-        // One passage per source, every relevant line quoted.
-        for source in sources {
+        // One passage per source, every relevant line quoted, nothing else.
+        for passage in passages {
+            let source = passage.source
             let when = relativeDescription(for: source.createdAt, now: now)
-            let lines = passageLines(for: source)
             let heading = "**\(source.title.trimmingCharacters(in: .whitespacesAndNewlines))** · \(source.kindTitle), \(when)"
-            written.append(([heading] + lines.map { "• \($0)" }).joined(separator: "\n"))
+            written.append(([heading] + passage.lines.map { "• \($0)" }).joined(separator: "\n"))
 
-            let quoted = lines.prefix(2).joined(separator: ". ")
-            spoken.append("From your \(source.kindTitle.lowercased()) \(source.title), saved \(when): \(quoted).")
+            // Spoken: the name already carries the point when there is nothing
+            // under it, so saying "from your note X: " and then stopping would
+            // trail off mid-sentence.
+            if passage.lines.isEmpty {
+                spoken.append("From your \(source.kindTitle.lowercased()) \(when): \(source.title).")
+            } else {
+                let quoted = passage.lines.prefix(2).joined(separator: ". ")
+                spoken.append("From your \(source.kindTitle.lowercased()) \(source.title), saved \(when): \(quoted).")
+            }
         }
 
-        // The details somebody would otherwise have to fish out themselves.
-        let details = self.details(in: sources.flatMap(passageLines(for:)), query: cleanQuery)
+        // The details somebody would otherwise have to fish out themselves,
+        // taken only from what was actually quoted above.
+        let quotedLines = passages.flatMap { [$0.source.title] + $0.lines }
+        let details = self.details(in: quotedLines, query: cleanQuery)
         if !details.isEmpty {
             written.append("**Worth noting:** " + details.joined(separator: " · "))
             spoken.append("Worth noting: " + details.joined(separator: ", ") + ".")
         }
 
-        // The close: where to go next.
+        // The close: where to go next. `totalMatches` is how many are listed
+        // under the reply, so "more" means more rows down there — not a count
+        // of everything the ranker touched, most of which was dropped for
+        // being beside the point.
+        let extra = max(0, (totalMatches ?? count) - count)
         var closing = "Tap a source below to open the whole thing."
         if extra > 0 {
-            closing = (extra == 1 ? "1 more note mentions it too" : "\(extra) more notes mention it too")
-                + " — everything is listed below. Tap any source to open the whole thing."
-            spoken.append(extra == 1 ? "One more note mentions it as well." : "\(extra) more notes mention it as well.")
+            closing = (extra == 1 ? "1 more match is listed below" : "\(extra) more matches are listed below")
+                + ". Tap any source to open the whole thing."
+            spoken.append(extra == 1 ? "One more match is listed below." : "\(extra) more matches are listed below.")
         }
         written.append(closing)
 
-        let references = sources.map {
+        let references = passages.map {
             Reference(
-                id: $0.identifier,
-                title: $0.title,
-                kindTitle: $0.kindTitle,
-                when: relativeDescription(for: $0.createdAt, now: now)
+                id: $0.source.identifier,
+                title: $0.source.title,
+                kindTitle: $0.source.kindTitle,
+                when: relativeDescription(for: $0.source.createdAt, now: now)
             )
         }
 
@@ -146,16 +186,70 @@ enum AnswerComposer {
         )
     }
 
-    /// What a passage quotes: the relevant lines when there are any, the
-    /// snippet otherwise, and the title when there's nothing else — a photo
-    /// with no words on it still has a name.
-    private static func passageLines(for source: AnswerSource) -> [String] {
-        let lines = source.lines
-            .map { tighten($0) }
-            .filter { !$0.isEmpty }
-        if !lines.isEmpty { return Array(lines.prefix(linesPerSource)) }
-        let fallback = tighten(source.snippet.isEmpty ? source.title : source.snippet)
-        return fallback.isEmpty ? [] : [fallback]
+    // MARK: - What earns a place in the answer
+
+    /// How far below the best match a result can score and still be worth
+    /// presenting as part of an answer.
+    static let relevanceFloor = 0.45
+
+    /// The sources that actually bear on the question, each with what it has
+    /// to say.
+    ///
+    /// A source earns its place one of two ways: a line of it carries a word
+    /// from the question, or its **own name** does. The second matters more
+    /// than it sounds. A note called "Dentist appointment" whose body reads
+    /// "Tuesday at four with Dr Alvarez" answers *"what did I save about the
+    /// dentist"* perfectly, and not one word of that body is "dentist".
+    private static func passages(in sources: [AnswerSource], terms: Set<String>) -> [Passage] {
+        guard let best = sources.map(\.score).max() else { return [] }
+        // A floor of zero would divide every result by nothing; when no score
+        // was supplied, keep them all and let the word tests decide.
+        let floor = best > 0 ? best * relevanceFloor : -.infinity
+
+        var kept: [Passage] = []
+        for source in sources where source.score >= floor {
+            let titleTerms = Set(Tokenizer.tokens(in: source.title))
+            let namesTheSubject = !titleTerms.isDisjoint(with: terms)
+
+            let lines = usableLines(of: source, terms: terms, titleTerms: titleTerms, namesTheSubject: namesTheSubject)
+            guard !lines.isEmpty || namesTheSubject else { continue }
+            kept.append(Passage(source: source, lines: lines))
+        }
+        return kept
+    }
+
+    /// What one source contributes, after everything not worth reading is
+    /// dropped.
+    private static func usableLines(
+        of source: AnswerSource,
+        terms: Set<String>,
+        titleTerms: Set<String>,
+        namesTheSubject: Bool
+    ) -> [String] {
+        // `SearchEngine.relevantLines` has already required a word from the
+        // question in every line it returns. The snippet has not, so it is
+        // only trusted for a document whose name is already on the subject.
+        let candidates = source.lines.isEmpty
+            ? (namesTheSubject ? [source.snippet] : [])
+            : source.lines
+
+        var kept: [String] = []
+        // The name counts as already said, so a line repeating it is a
+        // repetition like any other.
+        var spoken: [Set<String>] = [titleTerms]
+
+        for candidate in candidates {
+            let line = tighten(candidate)
+            guard !line.isEmpty else { continue }
+            let lineTerms = Set(Tokenizer.tokens(in: line))
+            guard !lineTerms.isEmpty else { continue }
+            guard !spoken.contains(where: { DiscussionSummarizer.restates(lineTerms, $0) }) else { continue }
+
+            kept.append(line)
+            spoken.append(lineTerms)
+            if kept.count >= linesPerSource { break }
+        }
+        return kept
     }
 
     // MARK: - Details
@@ -239,14 +333,66 @@ enum AnswerComposer {
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - What the question was about
 
-    /// Strips filler from a question so the reply can name what it was about.
+    /// At most this many words name the subject. Past that it stops being a
+    /// subject and starts being the question again.
+    static let subjectWordLimit = 4
+
+    /// Names what the question was about, in the asker's own spelling.
+    ///
+    /// Two things make this harder than taking the search terms. Search terms
+    /// are **stemmed and repeated** — *"water all all purchase list"* was a
+    /// real heading — so this keeps the original words and drops a word it has
+    /// already used. And dictation **restarts**: *"Water, all the things are
+    /// What all the things are there on my purchase list?"* is one false start
+    /// followed by the actual question. People restart forwards, never
+    /// backwards, so everything before the last question word is discarded.
     static func subject(of query: String) -> String {
-        let terms = Tokenizer.queryTokens(in: query)
-        guard !terms.isEmpty else { return "that" }
-        return terms.prefix(6).joined(separator: " ")
+        var words: [String] = []
+        var seen = Set<String>()
+
+        for raw in lastQuestion(in: query).components(separatedBy: CharacterSet.alphanumerics.inverted) {
+            guard !raw.isEmpty else { continue }
+            // `normalize` drops stopwords and one-character noise for us.
+            guard let key = Tokenizer.normalize(raw) else { continue }
+            guard !Tokenizer.questionFillers.contains(key) else { continue }
+            guard !quantifiers.contains(key) else { continue }
+            guard seen.insert(key).inserted else { continue }
+
+            words.append(raw.lowercased())
+            if words.count >= subjectWordLimit { break }
+        }
+        return words.isEmpty ? "that" : words.joined(separator: " ")
     }
+
+    /// Words that say *how much* you want rather than what about, which is the
+    /// same reason "latest" and "recent" are filtered out of a search.
+    private static let quantifiers: Set<String> = [
+        "all", "any", "both", "each", "every", "everything", "few", "many",
+        "more", "most", "much", "several", "some", "total"
+    ]
+
+    private static let questionWords: Set<String> = [
+        "what", "whats", "which", "who", "whom", "whose", "when", "where", "how", "why"
+    ]
+
+    /// The question as finally asked, with any false start before it dropped.
+    private static func lastQuestion(in query: String) -> String {
+        let words = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        // Too short to contain a restart worth finding.
+        guard words.count > 3 else { return query }
+
+        let bare = words.map { $0.trimmingCharacters(in: CharacterSet.letters.inverted).lowercased() }
+        guard let start = bare.lastIndex(where: { questionWords.contains($0) }), start > 0 else {
+            return query
+        }
+        // Only when something is actually left to ask about.
+        let remainder = words[start...]
+        return remainder.count >= 2 ? remainder.joined(separator: " ") : query
+    }
+
+    // MARK: - Helpers
 
     /// Collapses whitespace and caps length so a spoken answer stays listenable.
     static func tighten(_ text: String, limit: Int = 320) -> String {

@@ -589,14 +589,44 @@ sitting next to a word you asked about (*TSH 5.46*). Then the close: how many
 more notes mention it, and to tap a source to open the whole thing.
 
 Every sentence of substance in that reply is **quoted**. The voice is
-generated — the "here's what I have", the "going through them" — and the facts
-are your own words, lifted whole. That is not a limitation dressed up as a
+generated — the "here's what I have", the "worth noting" — and the facts are
+your own words, lifted whole. That is not a limitation dressed up as a
 feature: an assistant that paraphrases your notes can tell you the invoice was
 54,000 when the note says 60,000, and you would have no way of knowing. So
 under every reply sit its **sources** — the note, photo, PDF or recording it
 was built from, with what it is, when it was filed, and why it matched — and
-tapping one opens the original. Everything that matched is listed, not only
-what the reply quoted; the sixth match may be the one you were thinking of.
+tapping one opens the original.
+
+**What it refuses to say matters as much as what it says.** Three rules, each
+written against a row that actually appeared on screen:
+
+- **Nothing that doesn't bear on the question.** Ranking always returns
+  *something*, so asking what was on a purchase list surfaced a meeting
+  invitation and a voice memo about a phone balance. A result now has to score
+  within reach of the best one, and have something to contribute, before it is
+  presented as part of an answer. The floor is relative rather than a fixed
+  number, because fused scores are normalized per query and the best match has
+  to survive however low everything scored.
+- **Never a line picked at random.** When no line of a document carries a word
+  from the question, the reply used to fall back to that document's snippet,
+  which is how a question about shopping was answered with *"Because I have
+  only six hours balance"*. A document with nothing to say now says nothing.
+  The exception is a document whose **own name** is on the subject: "Dentist
+  appointment" answers *"what did I save about the dentist"*, and *"Tuesday at
+  four with Dr Alvarez"* is the answer even though not one word of it is
+  "dentist".
+- **Never the same sentence twice.** A note called "Purchase a black belt"
+  whose only line is "Purchase a black belt" is one fact, printed once. The
+  name counts as already said, so a line repeating it is a repetition like any
+  other, judged on shared words rather than exact text.
+
+**The subject is named in your own words.** The heading used to read *"Here's
+what I have on water all all purchase list"*, which is two bugs in one phrase.
+Search terms are stemmed and repeated, so the subject now keeps the original
+spelling and drops a word it has already used. And dictation restarts: *"Water,
+all the things are What all the things are there on my purchase list?"* is a
+false start followed by the real question. People restart forwards, never
+backwards, so everything before the last question word is discarded.
 
 Tap the microphone and the same pipeline runs on live dictation.
 
