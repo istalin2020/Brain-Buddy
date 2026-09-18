@@ -464,25 +464,53 @@ just point:
 
 **The surface is generated, not downloaded.** There is no mesh file in this
 repository and there shouldn't be — a scanned brain is tens of megabytes, needs
-a licence, and has to be re-exported every time the look changes. `BrainMesh`
-builds it from a formula: an ellipsoid at roughly cerebral proportions, folded
-by three layers of sine waves into gyri, with the **longitudinal fissure** cut
-deliberately down the midline (that single groove is what separates a brain from
-a blob), a tapered forehead, a temporal bulge and a flattened underside. Then a
-cerebellum with tight parallel ridges, and a stem.
+a licence, and has to be re-exported every time the look changes. The look it
+is built to is the *medical-scan hologram* every futuristic interface uses:
+glowing ridges on near-black, the far side fading, the rim lit, the crests
+sparkling. That footage is stock and licensed, so none of it is in the app;
+`BrainMesh` produces the same thing from a formula, and hands back not just the
+shape but **how folded each point is**, because that number is what the
+picture is drawn with.
 
-**Lit, not just outlined.** The first version drew the brain as glowing lines
-on a transparent background — the film idea of a hologram — and it did not read
-as a brain, for a reason that is obvious in hindsight: a fold you cannot
-*shade* is a fold nobody sees. Lines show an outline; only light shows a
-surface. So the tissue is now a lit, translucent solid that writes depth, on
-its own **dark stage** in both appearances, with a three-point rig — a key from
-the front-top-right that makes the gyri read, a violet fill so the shadow side
-never goes black, a cyan rim from behind that draws the silhouette. The near
-surface hides the far one, the fissure falls into shadow, and the wireframe
-over the top is detail rather than the whole drawing. The core still breathes
-in the middle, seen faintly through the tissue, and the camera has bloom so the
-bright parts glow.
+**Gyri you can actually see.** Real gyri are long, winding ridges, locally
+parallel and crossing at odd angles — a fingerprint wrapped over a sphere.
+Layered sine waves gave ripples nobody could see. The surface is now displaced
+by a *warped stripe field*: parallel ridges along one axis, bent by slower
+waves along two others so they wind, branch and merge, with a weaker crossing
+set and a fine wrinkle on top, then sharpened so the crests are narrow and the
+valleys wide, which is the proportion tissue has. The **longitudinal fissure**
+splits the hemispheres down the top, and the **sylvian fissure** — the deep
+angled groove on each side that the temporal lobe hangs beneath — is cut into
+the flanks. Those two grooves, plus a rounded frontal lobe, an occipital lobe
+that pulls down at the back and a flat base, are the silhouette of a brain in
+profile, which is the view the camera opens on.
+
+**Drawn as a scan, not lit as a solid.** Two earlier versions failed in
+opposite directions: additive lines on a transparent page were a tangle,
+because a wireframe you see through has no near and far; a lit translucent
+solid was a blob, because folds too shallow to shade are folds nobody sees.
+Four things make the current picture. The fold value is baked into **vertex
+colour**, so a ridge crest is bright and a sulcus nearly black whatever the
+lighting. The tissue is drawn **additively, nearest layer only**, so the far
+side is hidden and the near side glows on the dark stage. A **Fresnel rim** in
+a fragment shader lights the surface where it turns away from the camera —
+the one effect a translucent thing cannot fake with colour: its edge. And the
+ridge crests are also drawn as a **point cloud**, every other vertex above the
+crest line, which is where the sparkle comes from. A faint wireframe with no
+depth test shows the far side through, at an alpha low enough never to
+tangle. The core breathes in the middle; the camera has bloom.
+
+**Every region carries a callout.** A dot on the cortex, a line out from it,
+and a HUD tag at the end naming what is filed there and how much — WORK 27,
+FAMILY 1, and so on — with the anatomy on the second line, except Work, whose
+second line reads *EMAIL 2 · REMINDERS 4 · NOTES 21*, because "where does it
+keep my reminders" is a question the map should answer without a tap. This is
+what turns a model into a map: without it you have to already know that the
+frontal lobe is Work. The stage itself is framed as an instrument — a faint
+grid, brackets in the corners, a monospaced readout of how much is on the map
+and which period, and a slow sweep line that never stops — because that frame
+is what makes a glowing translucent brain read as a scan rather than a
+mistake.
 
 **Every document is wired to it — on the cortex.** One node per memory, sitting
 *on* the surface in its region's direction rather than floating in a shell

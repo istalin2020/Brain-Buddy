@@ -36,6 +36,8 @@ struct BrainView: View {
     @State private var section: WorkSection?
     @State private var openFile: UUID?
     @State private var resetToken = 0
+    /// Position of the HUD sweep line, 0 at the top, 1 past the bottom.
+    @State private var sweep: CGFloat = 0
     /// Owned rather than implicit, so a memory tapped in the device's own search
     /// can be pushed from outside this view.
     @State private var path: [MemoryItem] = []
@@ -143,20 +145,26 @@ struct BrainView: View {
 
     // MARK: - The model
 
-    /// The model, on its own dark stage.
+    /// The model, on its own dark stage, framed like a scan.
     ///
-    /// Always dark, in both appearances: the tissue is lit and the wires glow,
-    /// and neither survives a white page. Framing it as a panel also says what
-    /// it is — a viewport into something, not a decoration between two lists.
+    /// Always dark, in both appearances: everything in the scene is drawn by
+    /// adding light, and adding light to a white page is invisible. The HUD
+    /// around it — grid, corner brackets, a readout, a slow sweep — is not
+    /// decoration for its own sake. It says *this is an instrument showing you
+    /// something*, which is the frame in which a glowing translucent brain
+    /// reads as a scan rather than as a mistake.
     private var stage: some View {
         BrainSceneView(
             files: sceneFiles,
+            counts: map.counts,
+            workSections: workSectionCounts,
             highlight: selection,
             selectedFile: $openFile,
             resetToken: resetToken
         )
-            .frame(height: 340)
+            .frame(height: 400)
             .background(Color(uiColor: BrainSceneBuilder.Palette.stage))
+            .overlay { hud }
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay(alignment: .topTrailing) {
                 Button {
@@ -176,12 +184,95 @@ struct BrainView: View {
                 Text(openFile == nil
                      ? "Drag to turn · pinch in to read the nodes · tap one"
                      : "Tap the summary below to open the document")
-                    .font(.caption2)
-                    .foregroundStyle(Color.white.opacity(0.62))
-                    .padding(.bottom, 8)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(Self.hudTint.opacity(0.75))
+                    .padding(.bottom, 10)
                     .allowsHitTesting(false)
             }
             .padding(.horizontal)
+            .onAppear {
+                withAnimation(.linear(duration: 6).repeatForever(autoreverses: false)) {
+                    sweep = 1
+                }
+            }
+    }
+
+    private static let hudTint = Color(uiColor: BrainSceneBuilder.Palette.wire)
+
+    /// The instrument frame over the scene: a faint grid, brackets in the
+    /// corners, a readout, and a sweep line that never stops. All of it lets
+    /// touches through — the brain underneath is what you interact with.
+    private var hud: some View {
+        ZStack(alignment: .topLeading) {
+            Canvas { context, size in
+                var grid = Path()
+                let step: CGFloat = 32
+                var x = step
+                while x < size.width {
+                    grid.move(to: CGPoint(x: x, y: 0))
+                    grid.addLine(to: CGPoint(x: x, y: size.height))
+                    x += step
+                }
+                var y = step
+                while y < size.height {
+                    grid.move(to: CGPoint(x: 0, y: y))
+                    grid.addLine(to: CGPoint(x: size.width, y: y))
+                    y += step
+                }
+                context.stroke(grid, with: .color(Color.white.opacity(0.045)), lineWidth: 0.5)
+
+                let inset: CGFloat = 12
+                let arm: CGFloat = 22
+                var brackets = Path()
+                for corner in [
+                    (CGPoint(x: inset, y: inset), CGFloat(1), CGFloat(1)),
+                    (CGPoint(x: size.width - inset, y: inset), CGFloat(-1), CGFloat(1)),
+                    (CGPoint(x: inset, y: size.height - inset), CGFloat(1), CGFloat(-1)),
+                    (CGPoint(x: size.width - inset, y: size.height - inset), CGFloat(-1), CGFloat(-1))
+                ] {
+                    let (origin, dx, dy) = corner
+                    brackets.move(to: CGPoint(x: origin.x, y: origin.y + dy * arm))
+                    brackets.addLine(to: origin)
+                    brackets.addLine(to: CGPoint(x: origin.x + dx * arm, y: origin.y))
+                }
+                context.stroke(brackets, with: .color(Self.hudTint.opacity(0.85)), lineWidth: 1.5)
+            }
+
+            GeometryReader { geometry in
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [.clear, Self.hudTint.opacity(0.22), .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(height: 48)
+                    .offset(y: sweep * (geometry.size.height + 48) - 48)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("MEMORY MAP")
+                    .font(.system(.caption, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(Self.hudTint)
+                Text(readout)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(Self.hudTint.opacity(0.7))
+            }
+            .padding(.leading, 22)
+            .padding(.top, 20)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var readout: String {
+        let scope = period?.label ?? "ALL TIME"
+        return "\(map.total) MEMORIES · \(scope.uppercased()) · \(sceneFiles.count) ON MAP"
+    }
+
+    /// Work's rooms, for the Work callout's second line.
+    private var workSectionCounts: [WorkSection: Int] {
+        Dictionary(uniqueKeysWithValues: WorkSection.allCases.map { ($0, map.count(.work, section: $0)) })
     }
 
 
