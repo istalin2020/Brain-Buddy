@@ -113,9 +113,34 @@ enum BriefGrouping {
 
         // A dated line was already found to be happening today.
         if kind == .schedule { return .reminders }
+        // Checked before anything else looks at the date, because a record of
+        // what happened is full of dates and none of them are appointments.
+        if isARecord(text) { return nil }
         if isReminder(text) { return .reminders }
         guard isToDo(text) else { return .info }
         return isOffice(text, sourceRegion: sourceRegion) ? .office : .personal
+    }
+
+    // MARK: - Records
+
+    /// Whether the line is a record of something that already happened.
+    ///
+    /// *"Came to Harweel site visit on 16th September 2026"* is a diary entry.
+    /// It is worth keeping, and it is kept — the note is in your brain, the
+    /// Brain tab files it, and Ask will find it. It is simply not something to
+    /// do, not something to be reminded about, and not news you need this
+    /// morning. **Today is for what is still ahead of you.**
+    ///
+    /// Two things stop this swallowing more than it should. It reads only the
+    /// *opening* verb, so a past tense further in keeps its place: *"Al Qersh
+    /// confirmed to do the sparing work with 60,000 Omani rial"* reports what
+    /// somebody committed to, and that belongs under Important info. And a
+    /// commitment or obligation anywhere in the line overrides it, because
+    /// *"Took the video record, they will put it on TV"* is still waiting on
+    /// somebody.
+    static func isARecord(_ text: String) -> Bool {
+        guard DiscussionSummarizer.opensInThePastTense(text) else { return false }
+        return !DiscussionSummarizer.isActionable(text)
     }
 
     // MARK: - Reminders
@@ -224,6 +249,9 @@ enum BriefGrouping {
     /// *"Confirm the booking"* opens with an order.
     static func reportsAFact(_ text: String) -> Bool {
         if opensWithAnOrder(text) { return false }
+        // Opening in the past tense settles it on its own; the word list below
+        // only ever catches what a sentence happens to contain.
+        if DiscussionSummarizer.opensInThePastTense(text) { return true }
         return !rawWords(in: text).isDisjoint(with: factWords)
     }
 

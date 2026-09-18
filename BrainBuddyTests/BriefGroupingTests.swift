@@ -148,6 +148,57 @@ final class BriefGroupingTests: XCTestCase {
         XCTAssertEqual(group("Pick up my daughter from school", from: .work), .personal)
     }
 
+    // MARK: - Records stay in the brain
+
+    /// The reported row: a note saying you went somewhere, sitting in
+    /// Reminders. It has a date on it, so it looked like an appointment, and
+    /// it opens with a verb, so it looked like an instruction. It is neither.
+    /// Today is for what is still ahead.
+    func testARecordOfWhatHappenedIsNotOnTodayAtAll() {
+        XCTAssertNil(group("Came to Harweel site visit on 16th September 2026"))
+        XCTAssertNil(group("Attended the kickoff meeting with the consultant"))
+        XCTAssertNil(group("Completed the galvanisation survey yesterday"))
+        XCTAssertNil(group("Went to the yard and checked the tower material"))
+    }
+
+    /// Only the opening verb is read. A past tense further in is how you
+    /// record what somebody committed to, which is worth remembering.
+    func testAPastTenseLaterInTheLineIsStillInformation() {
+        XCTAssertEqual(
+            group("Al Qersh confirmed to do the sparing work with 60,000 Omani rial"),
+            .info
+        )
+        XCTAssertEqual(group("Jury panel confirmed", kind: .point), .info)
+    }
+
+    /// A record that leaves somebody owing you something is not finished with.
+    func testARecordThatSomebodyStillOwesYouIsKept() {
+        XCTAssertEqual(group("Took video record, they will put it on TV"), .personal)
+        XCTAssertEqual(group("Sent the drawings, the consultant has to review them"), .office)
+    }
+
+    /// "Feed", "need" and "proceed" are base forms that end in -ed, which is
+    /// why the tense test asks the lemma rather than the spelling.
+    func testABaseFormEndingInEdIsNotAPastTense() {
+        XCTAssertFalse(DiscussionSummarizer.opensInThePastTense("Feed the generator before the shift"))
+        XCTAssertFalse(DiscussionSummarizer.opensInThePastTense("Proceed with the stringing on that stretch"))
+    }
+
+    /// Both halves of the tense test, on verbs there is no argument about.
+    func testPastTenseIsRecognisedRegularAndIrregular() {
+        XCTAssertTrue(DiscussionSummarizer.opensInThePastTense("Completed the survey on Tuesday"))
+        XCTAssertTrue(DiscussionSummarizer.opensInThePastTense("Came to the site this morning"))
+        XCTAssertFalse(DiscussionSummarizer.opensInThePastTense("Complete the survey on Tuesday"))
+        XCTAssertFalse(DiscussionSummarizer.opensInThePastTense("Come to the site this morning"))
+    }
+
+    /// A word spelled the same in both tenses is read as an instruction, since
+    /// a wrong to-do costs a swipe and a missed one costs the thing itself.
+    func testAnAmbiguousVerbIsReadAsAnInstruction() {
+        XCTAssertFalse(DiscussionSummarizer.opensInThePastTense("Read the report before Monday"))
+        XCTAssertEqual(group("Read the report before Monday"), .reminders)
+    }
+
     // MARK: - Exactly one card
 
     /// Age no longer moves things around: a to-do from a week ago is still a

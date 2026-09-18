@@ -345,21 +345,89 @@ enum DiscussionSummarizer {
     ///
     /// Tagged in place rather than in isolation — half of English verbs are also
     /// nouns, and `NLTagger` needs the rest of the clause to tell them apart.
+    ///
+    /// **An imperative is always the base form.** That one rule is what keeps
+    /// *"Came to Harweel site visit on 16th September"* out of a to-do list:
+    /// the tagger is quite right that "came" is a verb, and it is just as
+    /// certainly not an instruction. Neither is "Completed", "Attended" or
+    /// "Sent". No context turns a past tense into something you still have to
+    /// do.
     static func opensWithAnInstruction(_ clause: String) -> Bool {
         let trimmed = clause.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.hasSuffix("?") else { return false }
 
         let words = trimmed.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
         guard words.count >= 2 else { return false }
-        let opener = words[0].trimmingCharacters(in: CharacterSet.letters.inverted).lowercased()
-        guard opener.count > 1, !nonImperativeOpeners.contains(opener) else { return false }
 
-        let tagger = NLTagger(tagSchemes: [.lexicalClass])
-        tagger.string = trimmed
-        guard let first = trimmed.firstIndex(where: { $0.isLetter }) else { return false }
-        let tag = tagger.tag(at: first, unit: .word, scheme: .lexicalClass).0
-        return tag == .verb
+        guard let verb = openingVerb(of: trimmed) else { return false }
+        guard !nonImperativeOpeners.contains(verb.word) else { return false }
+        return verb.lemma == verb.word
     }
+
+    /// Whether a clause opens by saying what already happened.
+    ///
+    /// The shape of a diary entry: *"Came to…"*, *"Attended…"*, *"Completed…"*.
+    /// A past tense later in the sentence means nothing of the kind — *"Al
+    /// Qersh confirmed to do the sparing work with 60,000 Omani rial"* reports
+    /// what somebody committed to, which is worth remembering, so only the
+    /// opening word is read.
+    static func opensInThePastTense(_ clause: String) -> Bool {
+        guard let verb = openingVerb(of: clause) else { return false }
+        if irregularPastForms.contains(verb.word) { return true }
+        // A regular past tense is the base form plus -ed. Requiring the suffix
+        // as well as a differing lemma keeps other inflections out: "Sending
+        // the drawings tomorrow" is not the base form either, and it has not
+        // happened yet.
+        return verb.lemma != verb.word && verb.word.hasSuffix("ed")
+    }
+
+    /// The clause's opening word and its base form, when that word is a verb.
+    ///
+    /// The lemma is what separates "send" from "sent" and "complete" from
+    /// "completed", and it does it without a table of endings — which matters,
+    /// because "feed", "need", "proceed" and "exceed" are base forms that end
+    /// in -ed and are perfectly good instructions.
+    static func openingVerb(of clause: String) -> (word: String, lemma: String)? {
+        let trimmed = clause.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.firstIndex(where: { $0.isLetter }) else { return nil }
+
+        let word = String(
+            trimmed[first...].prefix { $0.isLetter || $0 == "'" || $0 == "\u{2019}" }
+        ).lowercased()
+        guard word.count > 1 else { return nil }
+
+        let tagger = NLTagger(tagSchemes: [.lexicalClass, .lemma])
+        tagger.string = trimmed
+        guard tagger.tag(at: first, unit: .word, scheme: .lexicalClass).0 == .verb else { return nil }
+
+        // No lemma means the tagger didn't recognize the form. Treating the
+        // word as its own base is the safe reading: it leaves the line
+        // available as an instruction rather than filing it away as done.
+        var base = word
+        if let lemma = tagger.tag(at: first, unit: .word, scheme: .lemma).0?.rawValue.lowercased(),
+           !lemma.isEmpty {
+            base = lemma
+        }
+        return (word, base)
+    }
+
+    /// Past forms that aren't simply the base form plus -ed.
+    ///
+    /// Deliberately excludes the ones English spells the same either way —
+    /// *read*, *put*, *cut*, *set*, *hit*, *let* — because "Read the report"
+    /// and "Put the file on the desk" are perfectly good instructions. An
+    /// ambiguous line is better treated as something to do than as something
+    /// already done: the first costs a swipe, the second costs the thing you
+    /// were trying not to forget.
+    private static let irregularPastForms: Set<String> = [
+        "became", "began", "broke", "brought", "bought", "built", "came",
+        "caught", "chose", "drew", "drove", "fell", "felt", "fought", "found",
+        "flew", "gave", "got", "grew", "heard", "held", "kept", "knew", "left",
+        "lost", "made", "met", "paid", "ran", "rode", "rose", "said", "sat",
+        "saw", "sent", "shook", "sold", "sought", "spent", "spoke", "stole",
+        "stood", "swam", "taught", "thought", "threw", "told", "took",
+        "understood", "went", "woke", "wore", "won", "wrote"
+    ]
 
     /// Words that begin a statement rather than an instruction, whatever the
     /// tagger makes of them.

@@ -73,53 +73,59 @@ struct TodayView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if isEmpty {
-                    emptyState
-                } else {
-                    board
+            content
+                .navigationTitle("Today")
+                .navigationDestination(for: MemoryItem.self) { item in
+                    MemoryDetailView(item: item)
                 }
-            }
-            .navigationTitle("Today")
-            .navigationDestination(for: MemoryItem.self) { item in
-                MemoryDetailView(item: item)
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    // Today answers "what now"; the review answers "how is it
-                    // actually going", which is a different question and belongs
-                    // one tap away rather than on the same screen.
-                    NavigationLink {
-                        ReviewView()
-                    } label: {
-                        Label("Review", systemImage: "chart.bar.doc.horizontal")
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        // Today answers "what now"; the review answers "how is
+                        // it actually going", which is a different question and
+                        // belongs one tap away rather than on the same screen.
+                        NavigationLink {
+                            ReviewView()
+                        } label: {
+                            Label("Review", systemImage: "chart.bar.doc.horizontal")
+                        }
                     }
                 }
-            }
-            // The brief is built here rather than at 8 am by a background task,
-            // because iOS grants no guaranteed slot at a fixed time. The 8 am
-            // notification is the alarm; this is the work, and it takes
-            // milliseconds off purely local data.
-            .task {
-                services.brief.generateIfNeeded(in: modelContext)
-                await services.offerMorningBriefIfNeeded()
-                await services.refreshReminders(in: modelContext)
-            }
-            .task(id: classificationSignature) { await classifySources() }
+                // The brief is built here rather than at 8 am by a background
+                // task, because iOS grants no guaranteed slot at a fixed time.
+                // The 8 am notification is the alarm; this is the work, and it
+                // takes milliseconds off purely local data.
+                .task {
+                    services.brief.generateIfNeeded(in: modelContext)
+                    await services.offerMorningBriefIfNeeded()
+                    await services.refreshReminders(in: modelContext)
+                }
+                .task(id: classificationSignature) { await classifySources() }
         }
     }
 
     // MARK: - The board
 
-    private var board: some View {
+    /// Grouped once per body pass and handed down, so the header's counts and
+    /// the cards can never disagree — the header used to count every line in
+    /// the database, including the ones no card claimed.
+    @ViewBuilder
+    private var content: some View {
+        let grouped = groupedEntries()
+        if grouped.isEmpty {
+            emptyState
+        } else {
+            board(grouped)
+        }
+    }
+
+    private func board(_ grouped: [BriefGroupKind: [BriefEntry]]) -> some View {
         // Resolved once per body pass. A per-row fetch would run on every render
         // of every line, which is the kind of thing that makes a list stutter.
         let sources = sourceLookup()
-        let grouped = groupedEntries()
 
         return ScrollView {
             LazyVStack(spacing: 16) {
-                header
+                header(grouped)
 
                 ForEach(BriefGroupKind.display) { group in
                     if let lines = grouped[group], !lines.isEmpty {
@@ -161,13 +167,13 @@ struct TodayView: View {
         sourceRegions = regions
     }
 
-    private var header: some View {
+    private func header(_ grouped: [BriefGroupKind: [BriefEntry]]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(Date().formatted(.dateTime.weekday(.wide).month(.wide).day()))
                         .font(.title3.weight(.semibold))
-                    Text(refreshNotice ?? progressLine)
+                    Text(refreshNotice ?? progressLine(in: grouped))
                         .font(.caption)
                         .foregroundStyle(refreshNotice == nil ? .secondary : Color.accentColor)
                 }
@@ -481,22 +487,18 @@ struct TodayView: View {
         return grouped
     }
 
-    private var openCount: Int {
-        entries.filter { !$0.isClosed }.count
-    }
+    /// Counted from what the cards actually hold, not from the table.
+    ///
+    /// A line can be in the brief and on no card at all — a record of
+    /// something that already happened is filed rather than shown — and
+    /// counting the table said "7 things open" over a screen showing six.
+    private func progressLine(in grouped: [BriefGroupKind: [BriefEntry]]) -> String {
+        let open = grouped
+            .filter { $0.key != .done }
+            .values
+            .reduce(0) { $0 + $1.count }
+        let closed = grouped[.done]?.count ?? 0
 
-    private var closedTodayCount: Int {
-        entries.filter { entry in
-            guard entry.isClosed, let closedAt = entry.closedAt else { return false }
-            return Calendar.current.isDate(closedAt, inSameDayAs: today)
-        }.count
-    }
-
-    private var isEmpty: Bool { openCount == 0 && closedTodayCount == 0 }
-
-    private var progressLine: String {
-        let open = openCount
-        let closed = closedTodayCount
         if open == 0 && closed > 0 { return "All clear — \(closed) closed today." }
         if open == 0 { return "Nothing open." }
 

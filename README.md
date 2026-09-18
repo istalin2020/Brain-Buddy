@@ -137,6 +137,28 @@ group is a card with a coloured tile, a count, five rows and a **+N more**, and
 the quote moves where quotes belong: inside the note, when you go looking for
 it. The cards are the four questions a morning actually has:
 
+**A record of what happened stays in the brain.** *"Came to Harweel site
+visit on 16th September 2026"* is a diary entry: it has a date on it, so it
+looked like an appointment, and it opens with a verb, so it looked like an
+instruction. It is neither, and Today is for what is still ahead of you. A
+line that opens by saying what already happened is now filed rather than
+shown — the note is in your brain, the Brain tab files it, and Ask finds it,
+but no card claims it. Two limits keep this from swallowing more than it
+should: only the **opening** verb is read, so *"Al Qersh confirmed to do the
+sparing work with 60,000 Omani rial"* still counts as information worth
+having; and a commitment anywhere in the line overrides it, because *"Took
+the video record, they will put it on TV"* is still waiting on somebody.
+
+The tense test asks for the verb's **base form** rather than matching
+endings, which is what makes it right in both directions. An English
+imperative is always the base form, so *"Came"*, *"Completed"* and *"Sent"*
+can never be instructions however confidently a part-of-speech tagger calls
+them verbs — that was the actual bug. And *"Feed"*, *"Need"* and *"Proceed"*
+are base forms that happen to end in -ed, so they stay available as
+instructions. Words spelled the same in both tenses — *read*, *put*, *set*,
+*cut* — are read as instructions, on the usual asymmetry: a wrong to-do costs
+one swipe, a missed one costs the thing you were trying not to forget.
+
 | Card | What lands on it |
 | --- | --- |
 | **Reminders** | Anything about *when*: a line that names a day, a date or a clock time — *"Submit the shutdown plan by Friday"*, *"Call the site office at 4:30"* — or says *remind*, *due*, *deadline*, *renew*, *expires*, *appointment*. Soonest first, each with a chip saying when: the time if it's today, *Tomorrow*, the weekday if it's this week, the date otherwise, and red once it has gone by. A month in a sentence about the past — *"at the yard since March"* — is history, not a reminder. |
