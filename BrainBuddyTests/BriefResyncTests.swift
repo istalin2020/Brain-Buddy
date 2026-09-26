@@ -345,6 +345,65 @@ final class BriefResyncTests: XCTestCase {
         XCTAssertGreaterThan(brief.generate(in: context), 0)
     }
 
+    // MARK: - Your wording
+
+    /// Your wording is yours: rebuilding, reconciling and tidying never touch
+    /// it, and the quote it replaced stays underneath for matching.
+    func testARewordedLineSurvivesEveryPass() throws {
+        let item = insert("Took video record ..they will put on TV")
+        brief.generate(in: context)
+        let entry = try XCTUnwrap(entries().first)
+        let quote = entry.text
+
+        brief.reword(entry, to: "Watch Doctor Wilson on Sathyam TV", in: context)
+        brief.reconcileAll(in: context)
+        brief.generate(in: context)
+
+        let after = try XCTUnwrap(entries().first)
+        XCTAssertEqual(entries().count, 1, "the original sentence is not proposed again")
+        XCTAssertEqual(after.subject, "Watch Doctor Wilson on Sathyam TV")
+        XCTAssertEqual(after.text, quote, "the quote stays underneath")
+        _ = item
+    }
+
+    /// Rewriting the note entirely retires an ordinary line — but not one you
+    /// reworded, because you said what it is.
+    func testARewordedLineIsNotRetiredWhenItsNoteIsRewritten() throws {
+        let item = insert("Book the roof survey and send the deposit to the surveyor")
+        brief.generate(in: context)
+        brief.reword(try XCTUnwrap(entries().first), to: "Roof survey", in: context)
+
+        item.text = "Ignore the invoice from the letting agency"
+        item.touch()
+        applyEdit(to: item)
+
+        XCTAssertTrue(entries().contains { $0.subject == "Roof survey" })
+    }
+
+    /// Clearing your wording puts the quote back.
+    func testEmptyWordingRestoresTheQuote() throws {
+        _ = insert("Prepare the PPT for the hackathon")
+        brief.generate(in: context)
+        let entry = try XCTUnwrap(entries().first)
+
+        brief.reword(entry, to: "PPT", in: context)
+        brief.reword(entry, to: "  ", in: context)
+
+        XCTAssertFalse(entry.isRewordedByUser)
+        XCTAssertEqual(entry.subject, "Prepare the PPT for the hackathon")
+    }
+
+    /// Renaming from Today is the same edit as renaming inside the note, and
+    /// it is marked as yours so re-deriving subjects never undoes it.
+    func testRenamingFromTodayRenamesTheNote() {
+        let item = insert("Took video record ..they will put on TV")
+        XCTAssertTrue(brief.renameNote(item, to: "Doctor Wilson on TV 29th Sep", in: context))
+        XCTAssertEqual(item.title, "Doctor Wilson on TV 29th Sep")
+        XCTAssertTrue(item.hasCustomTitle)
+        XCTAssertFalse(brief.renameNote(item, to: "   ", in: context), "an empty heading is refused")
+        XCTAssertEqual(item.title, "Doctor Wilson on TV 29th Sep")
+    }
+
     func testAnUntouchedNoteIsLeftCompletelyAlone() throws {
         _ = insert("Prepare the PPT for the hackathon")
         brief.generate(in: context)

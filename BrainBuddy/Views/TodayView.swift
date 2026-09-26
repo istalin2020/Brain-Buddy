@@ -15,6 +15,11 @@ import SwiftUI
 /// pulled out of your documents lands on exactly one of them — see
 /// `BriefGrouping` for the order they are claimed in.
 ///
+/// **Every row is editable, here or inside the note.** Press and hold a row
+/// and choose Edit. A note's main row *is* the note's heading, so renaming it
+/// here renames the note and renaming the note changes the row — see
+/// `BriefHeading`.
+///
 /// Everything here was already in your brain. The brief doesn't add knowledge,
 /// it just puts today's slice of it in front of you at the hour you asked for.
 @MainActor
@@ -26,9 +31,10 @@ struct TodayView: View {
     /// them. Bounded so the query doesn't grow without limit over years of use.
     @Query private var entries: [BriefEntry]
 
-    /// Used to resolve the "open the note this came from" links, and to decide
-    /// whose work a line is. Same whole-library query the Ask and Brain tabs
-    /// already use.
+    /// Used to resolve the "open the note this came from" links, to show each
+    /// note's heading on its main row, and to decide whose work a line is.
+    /// Being a live query is what makes a heading edited inside a note appear
+    /// here the moment you come back.
     @Query(filter: #Predicate<MemoryItem> { !$0.isTrashed })
     private var memories: [MemoryItem]
 
@@ -36,6 +42,11 @@ struct TodayView: View {
     @State private var isRefreshing = false
     @State private var refreshNotice: String?
     @State private var noticeDismissal: Task<Void, Never>?
+
+    /// The row being edited in place, and what is in its box.
+    @State private var editingLine: UUID?
+    @State private var draft = ""
+    @FocusState private var editorFocused: Bool
 
     /// What each source document is about — work, family, friends — so a line
     /// that doesn't say can take its answer from the note it came from.
@@ -105,31 +116,61 @@ struct TodayView: View {
 
     // MARK: - The board
 
-    /// Grouped once per body pass and handed down, so the header's counts and
-    /// the cards can never disagree — the header used to count every line in
-    /// the database, including the ones no card claimed.
-    @ViewBuilder
-    private var content: some View {
-        let grouped = groupedEntries()
-        if grouped.isEmpty {
-            emptyState
-        } else {
-            board(grouped)
+    /// Everything one body pass works out once and hands down, so the header's
+    /// counts, the cards and the words on each row can never disagree.
+    private struct Board {
+        var grouped: [BriefGroupKind: [BriefEntry]] = [:]
+        /// What each row says: your wording, the note's heading, or the quote.
+        var headings: [UUID: String] = [:]
+        /// Each note's main row — the one that *is* its heading.
+        var mainLines: Set<UUID> = []
+        var sources: [UUID: MemoryItem] = [:]
+
+        func heading(of entry: BriefEntry) -> String {
+            headings[entry.identifier] ?? entry.subject
         }
     }
 
-    private func board(_ grouped: [BriefGroupKind: [BriefEntry]]) -> some View {
+    @ViewBuilder
+    private var content: some View {
+        let board = makeBoard()
+        if board.grouped.isEmpty {
+            emptyState
+        } else {
+            boardView(board)
+        }
+    }
+
+    private func makeBoard() -> Board {
+        var board = Board()
         // Resolved once per body pass. A per-row fetch would run on every render
         // of every line, which is the kind of thing that makes a list stutter.
-        let sources = sourceLookup()
+        board.sources = sourceLookup()
+        board.mainLines = BriefHeading.mainLines(among: entries.map(\.headingLine))
 
-        return ScrollView {
+        for entry in entries {
+            let note = source(of: entry, in: board.sources)
+            board.headings[entry.identifier] = BriefHeading.text(
+                userText: entry.userText,
+                subject: entry.subject,
+                isMainLine: board.mainLines.contains(entry.identifier),
+                noteTitle: note?.title,
+                titleIsPlaceholder: note?.titleIsPlaceholder ?? true
+            )
+        }
+
+        board.grouped = groupedEntries(board)
+        return board
+    }
+
+    private func boardView(_ board: Board) -> some View {
+        ScrollView {
             LazyVStack(spacing: 16) {
-                header(grouped)
+                header(board.grouped)
 
                 ForEach(BriefGroupKind.display) { group in
-                    if let lines = grouped[group], !lines.isEmpty {
-                        card(group, lines: lines, sources: sources)
+                    if let lines = board.grouped[group], !lines.isEmpty {
+                        card(group, lines: lines, board: board)
                     }
                 }
             }
@@ -208,7 +249,7 @@ struct TodayView: View {
     private func card(
         _ group: BriefGroupKind,
         lines: [BriefEntry],
-        sources: [UUID: MemoryItem]
+        board: Board
     ) -> some View {
         let isOpen = expanded.contains(group)
         let visible = visibleLines(group, lines: lines, isOpen: isOpen)
@@ -216,7 +257,7 @@ struct TodayView: View {
 
         return VStack(spacing: 0) {
             cardHeader(group, count: lines.count, isOpen: isOpen)
-            cardRows(visible, group: group, sources: sources)
+            cardRows(visible, group: group, board: board)
             moreButton(group, hidden: hidden)
             caption(group, isOpen: isOpen)
         }
@@ -238,7 +279,7 @@ struct TodayView: View {
     private func cardRows(
         _ lines: [BriefEntry],
         group: BriefGroupKind,
-        sources: [UUID: MemoryItem]
+        board: Board
     ) -> some View {
         // `pair` rather than destructuring into `(index, entry)`: one less thing
         // for the checker to infer inside a builder.
@@ -247,7 +288,7 @@ struct TodayView: View {
                 if pair.offset > 0 {
                     Divider().padding(.leading, 52)
                 }
-                row(pair.element, group: group, source: source(of: pair.element, in: sources))
+                row(pair.element, group: group, board: board)
             }
         }
     }
@@ -281,7 +322,7 @@ struct TodayView: View {
     @ViewBuilder
     private func caption(_ group: BriefGroupKind, isOpen: Bool) -> some View {
         if isOpen {
-            Text(group.caption)
+            Text(group.caption + " Press and hold a line to edit it.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -336,10 +377,16 @@ struct TodayView: View {
         .accessibilityLabel("\(group.title), \(count)")
     }
 
+    // MARK: - One row
+
     /// One line: tick it off on the left, read it in the middle, open the note
-    /// it came from by tapping the text.
-    private func row(_ entry: BriefEntry, group: BriefGroupKind, source: MemoryItem?) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+    /// it came from by tapping the text, and press and hold to edit it.
+    private func row(_ entry: BriefEntry, group: BriefGroupKind, board: Board) -> some View {
+        let isEditing = editingLine == entry.identifier
+        let note = source(of: entry, in: board.sources)
+        let heading = board.heading(of: entry)
+
+        return HStack(alignment: .top, spacing: 12) {
             Button {
                 close(entry)
             } label: {
@@ -350,32 +397,87 @@ struct TodayView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(entry.isClosed ? "Reopen" : "Close")
 
-            Group {
-                if let source {
-                    NavigationLink(value: source) { rowText(entry) }
-                        .buttonStyle(.plain)
-                } else {
-                    rowText(entry)
+            if isEditing {
+                editor(entry, board: board)
+            } else {
+                Group {
+                    if let note {
+                        NavigationLink(value: note) { rowText(heading, isClosed: entry.isClosed) }
+                            .buttonStyle(.plain)
+                    } else {
+                        rowText(heading, isClosed: entry.isClosed)
+                    }
                 }
-            }
 
-            chip(for: entry, in: group)
+                chip(for: entry, heading: heading, in: group)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 11)
-        .contextMenu {
+        .contextMenu { rowMenu(entry, board: board) }
+    }
+
+    @ViewBuilder
+    private func rowMenu(_ entry: BriefEntry, board: Board) -> some View {
+        Button {
+            beginEditing(entry, board: board)
+        } label: {
+            Label(
+                editsNoteTitle(entry, board: board) ? "Edit heading" : "Edit",
+                systemImage: "pencil"
+            )
+        }
+        if entry.isRewordedByUser {
             Button {
-                close(entry)
-            } label: {
-                Label(entry.isClosed ? "Reopen" : "Close", systemImage: entry.isClosed ? "arrow.uturn.backward" : "checkmark")
-            }
-            Button(role: .destructive) {
-                services.brief.remove(entry, in: modelContext)
+                services.brief.reword(entry, to: "", in: modelContext)
                 rescheduleReminders()
             } label: {
-                Label("Remove", systemImage: "trash")
+                Label("Use the original wording", systemImage: "arrow.uturn.backward")
             }
         }
+        Button {
+            close(entry)
+        } label: {
+            Label(entry.isClosed ? "Reopen" : "Close", systemImage: entry.isClosed ? "arrow.uturn.backward" : "checkmark")
+        }
+        Button(role: .destructive) {
+            services.brief.remove(entry, in: modelContext)
+            rescheduleReminders()
+        } label: {
+            Label("Remove", systemImage: "trash")
+        }
+    }
+
+    /// Editing in place, in the card, so you never lose your place on the
+    /// board. On a note's main row it says so: the edit renames the note.
+    private func editor(_ entry: BriefEntry, board: Board) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("What this line says", text: $draft, axis: .vertical)
+                .font(.callout)
+                .lineLimit(1...4)
+                .focused($editorFocused)
+                .submitLabel(.done)
+                .onSubmit { commitEdit(entry, board: board) }
+
+            HStack(spacing: 12) {
+                if editsNoteTitle(entry, board: board) {
+                    Label("Also renames the note", systemImage: "link")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .labelStyle(.titleAndIcon)
+                }
+                Spacer(minLength: 4)
+                Button("Cancel") { cancelEdit() }
+                    .font(.footnote)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                Button("Save") { commitEdit(entry, board: board) }
+                    .font(.footnote.weight(.semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The small right-hand chip.
@@ -385,8 +487,8 @@ struct TodayView: View {
     /// the line has waited, so a to-do from three days ago doesn't look like
     /// this morning's.
     @ViewBuilder
-    private func chip(for entry: BriefEntry, in group: BriefGroupKind) -> some View {
-        if group == .reminders, let due = due(for: entry) {
+    private func chip(for entry: BriefEntry, heading: String, in group: BriefGroupKind) -> some View {
+        if group == .reminders, let due = due(for: entry, heading: heading) {
             Text(due.label)
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(due.isPast ? Color.red : Color.orange)
@@ -403,20 +505,23 @@ struct TodayView: View {
         }
     }
 
-    /// When a reminder falls due: the time the builder detected, or the day
-    /// the line itself names.
-    private func due(for entry: BriefEntry) -> BriefDue? {
-        let date = entry.scheduledAt ?? BriefGrouping.dueDate(in: entry.text, today: today)
+    /// When a reminder falls due: the time the builder detected, then the day
+    /// the words on screen name, then the day the quoted sentence names —
+    /// unless you reworded the line, in which case only your words count.
+    private func due(for entry: BriefEntry, heading: String) -> BriefDue? {
+        let date = entry.scheduledAt
+            ?? BriefGrouping.dueDate(in: heading, today: today)
+            ?? (entry.isRewordedByUser ? nil : BriefGrouping.dueDate(in: entry.text, today: today))
         return date.map { BriefGrouping.due(for: $0, today: today) }
     }
 
-    /// The subject only. The full quote lives in the note — printing it here is
+    /// The heading only. The full quote lives in the note — printing it here is
     /// what made twenty lines unreadable.
-    private func rowText(_ entry: BriefEntry) -> some View {
-        Text(entry.subject)
+    private func rowText(_ heading: String, isClosed: Bool) -> some View {
+        Text(heading)
             .font(.callout)
-            .strikethrough(entry.isClosed, color: .secondary)
-            .foregroundStyle(entry.isClosed ? .secondary : .primary)
+            .strikethrough(isClosed, color: .secondary)
+            .foregroundStyle(isClosed ? .secondary : .primary)
             .lineLimit(2)
             .multilineTextAlignment(.leading)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -436,7 +541,11 @@ struct TodayView: View {
 
     /// Every line, on exactly one card. See `BriefGrouping` for the order the
     /// cards claim them in.
-    private func groupedEntries() -> [BriefGroupKind: [BriefEntry]] {
+    ///
+    /// Sorted by the words on screen — your wording, or the note's heading —
+    /// because those are the words you chose. The sentence underneath still
+    /// counts for *when*, unless you reworded the line yourself.
+    private func groupedEntries(_ board: Board) -> [BriefGroupKind: [BriefEntry]] {
         var grouped: [BriefGroupKind: [BriefEntry]] = [:]
 
         for entry in entries {
@@ -445,9 +554,8 @@ struct TodayView: View {
                 day: entry.day,
                 isClosed: entry.isClosed,
                 closedAt: entry.closedAt,
-                // The full line, not the heading: the heading of a reminder has
-                // had its date taken off, and the date is what makes it one.
-                text: entry.text,
+                text: board.heading(of: entry),
+                underlyingText: entry.isRewordedByUser ? nil : entry.text,
                 sourceRegion: entry.sourceIdentifier.flatMap { sourceRegions[$0] },
                 today: today
             ) else { continue }
@@ -458,7 +566,7 @@ struct TodayView: View {
         // sort below would otherwise run the date detector n·log n times.
         var dueDates: [UUID: Date] = [:]
         for entry in grouped[.reminders] ?? [] {
-            dueDates[entry.identifier] = due(for: entry)?.date
+            dueDates[entry.identifier] = due(for: entry, heading: board.heading(of: entry))?.date
         }
 
         // Snapshotted: mutating the dictionary while iterating its own keys view
@@ -508,6 +616,55 @@ struct TodayView: View {
             line += " · built \(built.formatted(date: .omitted, time: .shortened))"
         }
         return line
+    }
+
+    // MARK: - Editing
+
+    private func editsNoteTitle(_ entry: BriefEntry, board: Board) -> Bool {
+        guard source(of: entry, in: board.sources) != nil else { return false }
+        return BriefHeading.editsNoteTitle(
+            isMainLine: board.mainLines.contains(entry.identifier),
+            userText: entry.userText
+        )
+    }
+
+    private func beginEditing(_ entry: BriefEntry, board: Board) {
+        draft = board.heading(of: entry)
+        withAnimation(.easeInOut(duration: 0.15)) {
+            editingLine = entry.identifier
+        }
+        // Focus on the next pass: the field has to exist before it can take
+        // the keyboard.
+        Task { editorFocused = true }
+    }
+
+    private func cancelEdit() {
+        editorFocused = false
+        withAnimation(.easeInOut(duration: 0.15)) {
+            editingLine = nil
+        }
+    }
+
+    /// Saves where the words belong: the note's heading for its main row, the
+    /// row itself for any other. An empty box is treated as Cancel rather
+    /// than as "erase this line".
+    private func commitEdit(_ entry: BriefEntry, board: Board) {
+        let wording = draft
+            .components(separatedBy: .newlines)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        cancelEdit()
+        guard !wording.isEmpty, wording != board.heading(of: entry) else { return }
+
+        if editsNoteTitle(entry, board: board), let note = source(of: entry, in: board.sources) {
+            guard services.brief.renameNote(note, to: wording, in: modelContext) else { return }
+            // The same path as renaming inside the note: re-index for search
+            // and Spotlight, and rebuild the reminders that name this line.
+            Task { await services.applyEdit(to: note, in: modelContext) }
+        } else {
+            services.brief.reword(entry, to: wording, in: modelContext)
+            rescheduleReminders()
+        }
     }
 
     // MARK: - Actions

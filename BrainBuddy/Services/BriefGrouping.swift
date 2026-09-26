@@ -101,6 +101,7 @@ enum BriefGrouping {
         isClosed: Bool,
         closedAt: Date?,
         text: String,
+        underlyingText: String? = nil,
         sourceRegion: BrainRegion? = nil,
         today: Date,
         calendar: Calendar = .current
@@ -117,8 +118,16 @@ enum BriefGrouping {
         // what happened is full of dates and none of them are appointments.
         if isARecord(text) { return nil }
         if isReminder(text) { return .reminders }
+        // A row showing the note's heading is sorted by the heading — those are
+        // the words on screen — but the sentence it stands for still has a say
+        // about *when*. "Drawings" is the heading; "Send the drawings on Friday"
+        // is why it is a reminder.
+        if let underlyingText, underlyingText != text,
+           isReminder(underlyingText), !isARecord(underlyingText) {
+            return .reminders
+        }
         guard isToDo(text) else { return .info }
-        return isOffice(text, sourceRegion: sourceRegion) ? .office : .personal
+        return isOffice(text + "\n" + (underlyingText ?? ""), sourceRegion: sourceRegion) ? .office : .personal
     }
 
     // MARK: - Records

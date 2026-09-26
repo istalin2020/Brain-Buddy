@@ -137,6 +137,38 @@ group is a card with a coloured tile, a count, five rows and a **+N more**, and
 the quote moves where quotes belong: inside the note, when you go looking for
 it. The cards are the four questions a morning actually has:
 
+**Every row is editable, and a note's main row is its heading.** A note and
+its line on Today used to be two separate pieces of text: the note was headed
+*"Doctor Wilson on TV 29th Sep"* and its row read *"Took video record… they
+will put on TV"*, and editing one never touched the other. Now:
+
+- **A note's main row shows the note's heading, live.** The main row is the
+  first line that note ever put in the brief, chosen across open *and* closed
+  lines so the choice never moves — otherwise ticking it off would hand the
+  heading to the next row down. Rename the note inside and the row changes the
+  moment you come back; edit the row on Today and the note is renamed, because
+  both are the same field, and it is marked as yours so re-deriving subjects
+  never undoes it.
+- **Any other row is its own line.** A note can put up to three rows in the
+  brief, and the second and third are separate points. Editing one stores your
+  wording on that row alone.
+- **Your wording always wins, and nothing automatic writes to it.** It is kept
+  apart from the quoted sentence rather than replacing it, because the quote is
+  what the brief matches on: overwrite it and tomorrow's rebuild would propose
+  the original sentence again as a "new" line. A reworded row is never
+  retired when its note is rewritten, never collapsed as a duplicate, and
+  *Use the original wording* in its menu puts the quote back.
+
+Press and hold any row and choose **Edit** — or **Edit heading** on a note's
+main row, which says *Also renames the note* while you type. Rows are sorted by
+the words on screen, since those are the words you chose, but the sentence
+underneath still counts for *when*: a row headed *"Drawings for PCH"* quoting
+*"Send the drawings to PCH on Friday"* stays a reminder. Reword the line
+yourself and only your words decide. A note whose title is a machine
+placeholder — *"Voice note · 12 Sep"*, *"Scan"*, a file name — keeps the quoted
+sentence on its main row until you give it a heading; editing that row gives it
+one.
+
 **A record of what happened stays in the brain.** *"Came to Harweel site
 visit on 16th September 2026"* is a diary entry: it has a date on it, so it
 looked like an appointment, and it opens with a verb, so it looked like an

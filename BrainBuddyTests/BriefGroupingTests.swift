@@ -199,6 +199,79 @@ final class BriefGroupingTests: XCTestCase {
         XCTAssertEqual(group("Read the report before Monday"), .reminders)
     }
 
+    // MARK: - Headings and the sentence underneath
+
+    /// The reported note: its heading carries the date, so its main row is a
+    /// reminder even though the sentence it was quoted from is not.
+    func testAHeadingWithADateIsAReminder() {
+        XCTAssertEqual(
+            BriefGrouping.group(
+                kind: .task,
+                day: today,
+                isClosed: false,
+                closedAt: nil,
+                text: "Doctor Wilson on TV 29th Sep",
+                underlyingText: "Took video record ..they will put on TV",
+                today: today,
+                calendar: calendar
+            ),
+            .reminders
+        )
+    }
+
+    /// The other way round: a short heading, and the date in the sentence it
+    /// stands for. Still a reminder.
+    func testTheSentenceUnderAHeadingStillSaysWhen() {
+        XCTAssertEqual(
+            BriefGrouping.group(
+                kind: .task,
+                day: today,
+                isClosed: false,
+                closedAt: nil,
+                text: "Drawings for PCH",
+                underlyingText: "Send the drawings to PCH on Friday",
+                today: today,
+                calendar: calendar
+            ),
+            .reminders
+        )
+    }
+
+    /// When you reword a line there is no sentence underneath any more — your
+    /// words decide. Taking the date out takes it off Reminders.
+    func testYourWordingAloneDecides() {
+        XCTAssertEqual(
+            BriefGrouping.group(
+                kind: .task,
+                day: today,
+                isClosed: false,
+                closedAt: nil,
+                text: "Send the drawings to PCH",
+                underlyingText: nil,
+                today: today,
+                calendar: calendar
+            ),
+            .office
+        )
+    }
+
+    /// A record underneath a heading does not make a reminder of it.
+    func testARecordUnderneathIsNotAReminder() {
+        XCTAssertEqual(
+            BriefGrouping.group(
+                kind: .task,
+                day: today,
+                isClosed: false,
+                closedAt: nil,
+                text: "Harweel site",
+                underlyingText: "Came to Harweel site visit on 16th September 2026",
+                today: today,
+                calendar: calendar
+            ),
+            .office
+        )
+    }
+
     // MARK: - Exactly one card
 
     /// Age no longer moves things around: a to-do from a week ago is still a

@@ -69,6 +69,16 @@ final class BriefEntry {
     /// `MemoryItem.identifier` of the capture this came from.
     var sourceIdentifier: UUID? = nil
 
+    /// Your own wording for this line, when you have rewritten it on Today.
+    ///
+    /// Kept apart from `text` on purpose. `text` is the sentence quoted from the
+    /// note, and the brief matches on it: it is how a rebuild knows this line
+    /// already exists, and how an edit to the note finds the row to reword.
+    /// Overwriting it with your wording would break both — the original sentence
+    /// would be proposed again tomorrow as a "new" line. So your words live
+    /// here, win on screen, and nothing automatic ever writes to this field.
+    var userText: String = ""
+
     var sortIndex: Int = 0
     var createdAt: Date = Date()
 
@@ -109,8 +119,14 @@ extension BriefEntry {
         Tokenizer.tokens(in: text).joined(separator: " ")
     }
 
-    /// What the row leads with.
-    var subject: String { headline.isEmpty ? text : headline }
+    /// What the row leads with: your wording if you gave it some, otherwise the
+    /// short heading, otherwise the quote.
+    var subject: String {
+        if !userText.isEmpty { return userText }
+        return headline.isEmpty ? text : headline
+    }
+
+    var isRewordedByUser: Bool { !userText.isEmpty }
 
     /// The full quote, shown under the subject only when it says more than the
     /// subject already does.

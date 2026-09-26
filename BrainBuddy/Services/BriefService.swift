@@ -152,9 +152,27 @@ final class BriefService {
         )
         guard let entries = try? context.fetch(descriptor) else { return [] }
 
+        // A reminder should say what the row on Today says, so it is worded the
+        // same way: your wording, or the note's heading on its main row.
+        let everything = (try? context.fetch(
+            FetchDescriptor<BriefEntry>(predicate: #Predicate { $0.day >= cutoff })
+        )) ?? entries
+        let mainLines = BriefHeading.mainLines(among: everything.map(\.headingLine))
+        let notes = Dictionary(
+            (fetchMemories(in: context) ?? []).map { ($0.identifier, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
         var seen = Set<String>()
         return entries.compactMap { entry in
-            let subject = entry.subject.trimmingCharacters(in: .whitespacesAndNewlines)
+            let note = entry.sourceIdentifier.flatMap { notes[$0] }
+            let subject = BriefHeading.text(
+                userText: entry.userText,
+                subject: entry.subject,
+                isMainLine: mainLines.contains(entry.identifier),
+                noteTitle: note?.title,
+                titleIsPlaceholder: note?.titleIsPlaceholder ?? true
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !subject.isEmpty, seen.insert(entry.dedupeKey).inserted else { return nil }
             return subject
         }
@@ -296,7 +314,9 @@ final class BriefService {
         in context: ModelContext
     ) -> (kept: [BriefEntry], removed: Int) {
         var bySource: [UUID: [BriefEntry]] = [:]
-        for entry in entries where !entry.isClosed {
+        // A row you reworded is yours, like a closed one: it is never judged a
+        // duplicate of something the app wrote.
+        for entry in entries where !entry.isClosed && !entry.isRewordedByUser {
             guard let source = entry.sourceIdentifier else { continue }
             bySource[source, default: []].append(entry)
         }
@@ -393,7 +413,9 @@ final class BriefService {
         var changed = 0
         for entry in entries {
             guard let index = Self.bestMatch(for: entry, in: pool) else {
-                if producedKinds.contains(entry.kind) {
+                // A row you reworded stays, whatever became of the sentence it
+                // was quoted from: you said what it is.
+                if producedKinds.contains(entry.kind), !entry.isRewordedByUser {
                     context.delete(entry)
                     changed += 1
                 }
@@ -517,6 +539,33 @@ final class BriefService {
     func remove(_ entry: BriefEntry, in context: ModelContext) {
         context.delete(entry)
         save(context)
+    }
+
+    // MARK: - Your wording
+
+    /// Stores your own wording for one line. Empty puts the quote back.
+    ///
+    /// Only this row changes. A note's *main* row is edited through the note's
+    /// heading instead — see `BriefHeading` — so that Today and the note can
+    /// never disagree about what it is called.
+    func reword(_ entry: BriefEntry, to wording: String, in context: ModelContext) {
+        let cleaned = wording.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard cleaned != entry.userText else { return }
+        entry.userText = cleaned
+        save(context)
+    }
+
+    /// Renames a note from its row on Today. The note's heading and the row are
+    /// the same field, so this is the same edit as renaming it inside the note —
+    /// and it is marked as yours, so re-deriving subjects never undoes it.
+    func renameNote(_ item: MemoryItem, to title: String, in context: ModelContext) -> Bool {
+        let cleaned = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, cleaned != item.title else { return false }
+        item.title = cleaned
+        item.hasCustomTitle = true
+        item.touch()
+        save(context)
+        return true
     }
 
     func clearError() {
