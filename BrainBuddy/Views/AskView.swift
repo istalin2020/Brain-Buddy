@@ -211,7 +211,7 @@ struct AskView: View {
 
             ForEach(turn.sources) { hit in
                 NavigationLink(value: hit.item) {
-                    sourceRow(hit)
+                    sourceRow(hit, evidence: turn.evidence[hit.item.identifier])
                 }
                 .buttonStyle(.plain)
             }
@@ -219,8 +219,9 @@ struct AskView: View {
     }
 
     /// One thing the reply came from. Says what it is and when, so a photo
-    /// and a PDF with the same title can be told apart before opening.
-    private func sourceRow(_ hit: SearchHit) -> some View {
+    /// and a PDF with the same title can be told apart before opening — and,
+    /// under a one-answer reply, the line the answer was read from.
+    private func sourceRow(_ hit: SearchHit, evidence: String?) -> some View {
         HStack(spacing: 10) {
             Image(systemName: hit.item.kind.systemImage)
                 .font(.subheadline)
@@ -231,7 +232,15 @@ struct AskView: View {
                 Text(hit.item.displayTitle)
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1)
-                Text("\(hit.item.kind.title) · \(hit.item.createdAt.filedDateDescription) · \(hit.matchExplanation)")
+                if let evidence {
+                    Text("“\(evidence)”")
+                        .font(.caption)
+                        .foregroundStyle(Color.primary.opacity(0.8))
+                        .lineLimit(2)
+                }
+                Text(evidence == nil
+                     ? "\(hit.item.kind.title) · \(hit.item.createdAt.filedDateDescription) · \(hit.matchExplanation)"
+                     : "\(hit.item.kind.title) · \(hit.item.createdAt.filedDateDescription)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -486,38 +495,10 @@ struct AskView: View {
         turns.append(turn)
         bringToTop(turn.id)
 
-        // Weak matches are dropped before anything is shown. A question about
-        // a purchase list should not list a meeting invitation underneath the
-        // answer, however politely.
-        let hits = SearchEngine.confident(services.search.search(query: trimmed, in: memories, limit: 30))
-        let terms = Tokenizer.queryTokens(in: trimmed)
-        let quoted = Array(hits.prefix(Self.sourcesPerReply))
-
-        let composed = AnswerComposer.compose(
-            query: trimmed,
-            sources: quoted.map { hit in
-                AnswerSource(
-                    identifier: hit.item.identifier,
-                    title: hit.item.displayTitle,
-                    snippet: hit.snippet,
-                    lines: SearchEngine.relevantLines(
-                        for: terms,
-                        in: [hit.item.text, hit.item.extractedText, hit.item.summary]
-                            .filter { !$0.isEmpty }
-                            .joined(separator: "\n"),
-                        limit: AnswerComposer.linesPerSource
-                    ),
-                    createdAt: hit.item.createdAt,
-                    kindTitle: hit.item.kind.title,
-                    score: hit.score
-                )
-            },
-            totalMatches: min(hits.count, Self.sourcesListed)
-        )
-
-        // Every match worth having is listed, not only what the reply quoted:
-        // the sixth match may be the one you were thinking of.
-        let sources = Array(hits.prefix(Self.sourcesListed))
+        // Named `outcome` rather than `reply`: a local called `reply` would
+        // shadow the method it is calling in its own initializer.
+        let outcome = reply(to: trimmed)
+        let composed = outcome.answer
 
         Task {
             // Long enough for the question to land and the spinner to be seen
@@ -526,7 +507,8 @@ struct AskView: View {
             try? await Task.sleep(nanoseconds: 350_000_000)
             guard let index = turns.firstIndex(where: { $0.id == turn.id }) else { return }
             turns[index].answer = composed
-            turns[index].sources = sources
+            turns[index].sources = outcome.sources
+            turns[index].evidence = outcome.evidence
             // Held at the top again: the reply grew underneath the question,
             // and the question is where reading starts.
             bringToTop(turn.id)
@@ -544,6 +526,146 @@ struct AskView: View {
     /// a paragraph on top.
     private static let sourcesPerReply = 5
     private static let sourcesListed = 8
+    /// How many a question with one answer shows when the answer couldn't be
+    /// read: the closest few, not everything that shared a word with it.
+    private static let closestForUnanswered = 3
+
+    // MARK: - Working out the reply
+
+    private struct Reply {
+        var answer: AnswerComposer.Answer
+        var sources: [SearchHit]
+        /// The line each source was read from, when the reply is one answer.
+        var evidence: [UUID: String] = [:]
+    }
+
+    /// Search finds the documents; then, if the question has one answer, the
+    /// reader finds it inside them.
+    ///
+    /// Three outcomes, in order of how much they say:
+    ///
+    /// - **An answer.** "What is my name?" → "Your name is Joseph Stalin.",
+    ///   with only the documents that say so listed under it, each showing
+    ///   the line it was read from.
+    /// - **A question with one answer that couldn't be read.** Says so, and
+    ///   lists the closest three rather than walking through everything that
+    ///   happened to contain the word.
+    /// - **Any other question** — "what's on my purchase list" — gets the
+    ///   passage-by-passage reply, which is what those questions want.
+    private func reply(to question: String) -> Reply {
+        // Weak matches are dropped before anything is shown. A question about
+        // a purchase list should not list a meeting invitation underneath the
+        // answer, however politely.
+        let hits = SearchEngine.confident(services.search.search(query: question, in: memories, limit: 30))
+
+        if let factoid = AnswerExtractor.question(from: question) {
+            if let found = AnswerExtractor.answer(factoid, in: readerDocuments(for: hits)) {
+                let supporting = found.evidence.compactMap { evidence in
+                    hit(for: evidence.source, in: hits, line: evidence.line)
+                }
+                return Reply(
+                    answer: AnswerComposer.direct(found, sources: supporting.map { answerSource($0) }),
+                    sources: supporting,
+                    evidence: Dictionary(
+                        found.evidence.map { ($0.source, $0.line) },
+                        uniquingKeysWith: { first, _ in first }
+                    )
+                )
+            }
+
+            let closest = Array(hits.prefix(Self.closestForUnanswered))
+            return Reply(
+                answer: AnswerComposer.compose(
+                    query: question,
+                    sources: closest.map { answerSource($0, terms: Tokenizer.queryTokens(in: question)) },
+                    lead: closest.isEmpty ? nil : AnswerComposer.unansweredLead
+                ),
+                sources: closest
+            )
+        }
+
+        let terms = Tokenizer.queryTokens(in: question)
+        let quoted = Array(hits.prefix(Self.sourcesPerReply))
+        return Reply(
+            answer: AnswerComposer.compose(
+                query: question,
+                sources: quoted.map { answerSource($0, terms: terms) },
+                totalMatches: min(hits.count, Self.sourcesListed)
+            ),
+            // Every match worth having is listed, not only what the reply
+            // quoted: the sixth match may be the one you were thinking of.
+            sources: Array(hits.prefix(Self.sourcesListed))
+        )
+    }
+
+    /// What the reader looks through: the search results, best first, and
+    /// then every note you wrote yourself.
+    ///
+    /// The second half matters for questions about you. "Who am I?" shares no
+    /// word with "My name is Joseph Stalin", so search alone may never bring
+    /// that note up — but it is exactly the sentence the question is about,
+    /// and a first-person fact can only be in something you wrote.
+    private func readerDocuments(for hits: [SearchHit]) -> [AnswerExtractor.Document] {
+        var documents: [AnswerExtractor.Document] = []
+        var included = Set<UUID>()
+
+        for (rank, hit) in hits.enumerated() {
+            documents.append(readerDocument(hit.item, rank: rank))
+            included.insert(hit.item.identifier)
+        }
+        for item in memories where !included.contains(item.identifier) && !item.text.isEmpty {
+            documents.append(readerDocument(item, rank: nil))
+        }
+        return documents
+    }
+
+    private func readerDocument(_ item: MemoryItem, rank: Int?) -> AnswerExtractor.Document {
+        // A heading you typed is something you wrote; one the app derived is
+        // just the first line again.
+        let authored = [
+            item.hasCustomTitle ? item.title : "",
+            item.text,
+            item.summaryIsAutomatic ? "" : item.summary
+        ]
+        let extracted = [item.extractedText, item.summaryIsAutomatic ? item.summary : ""]
+        return AnswerExtractor.Document(
+            id: item.identifier,
+            authored: authored.filter { !$0.isEmpty }.joined(separator: "\n"),
+            extracted: extracted.filter { !$0.isEmpty }.joined(separator: "\n"),
+            rank: rank
+        )
+    }
+
+    /// A source row for a document the reader found the answer in. Usually a
+    /// search result already; a note found only by the reader gets a row of
+    /// its own, since it is exactly where the answer came from.
+    private func hit(for identifier: UUID, in hits: [SearchHit], line: String) -> SearchHit? {
+        if let existing = hits.first(where: { $0.item.identifier == identifier }) { return existing }
+        guard let item = memories.first(where: { $0.identifier == identifier }) else { return nil }
+        return SearchHit(item: item, score: 0, lexicalScore: 0, semanticScore: 0, snippet: line)
+    }
+
+    private func answerSource(_ hit: SearchHit) -> AnswerSource {
+        answerSource(hit, terms: [])
+    }
+
+    private func answerSource(_ hit: SearchHit, terms: [String]) -> AnswerSource {
+        AnswerSource(
+            identifier: hit.item.identifier,
+            title: hit.item.displayTitle,
+            snippet: hit.snippet,
+            lines: terms.isEmpty ? [] : SearchEngine.relevantLines(
+                for: terms,
+                in: [hit.item.text, hit.item.extractedText, hit.item.summary]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n"),
+                limit: AnswerComposer.linesPerSource
+            ),
+            createdAt: hit.item.createdAt,
+            kindTitle: hit.item.kind.title,
+            score: hit.score
+        )
+    }
 }
 
 /// One exchange: what you asked and what came back, with the memories the
@@ -556,4 +678,7 @@ struct AskTurn: Identifiable {
     let question: String
     var answer: AnswerComposer.Answer?
     var sources: [SearchHit] = []
+    /// For a one-answer reply: the line each source was read from, shown on its
+    /// row so you can see why it is there without opening it.
+    var evidence: [UUID: String] = [:]
 }

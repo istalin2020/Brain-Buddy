@@ -96,10 +96,35 @@ enum AnswerComposer {
         let lines: [String]
     }
 
+    /// The reply to a question that has one answer: the answer, as a sentence,
+    /// and nothing else. The sources it came from are listed under it by the
+    /// view, which is where "how do you know" belongs.
+    static func direct(_ found: AnswerExtractor.Answer, sources: [AnswerSource], now: Date = Date()) -> Answer {
+        Answer(
+            spoken: found.sentence,
+            written: found.markdown,
+            references: sources.map {
+                Reference(
+                    id: $0.identifier,
+                    title: $0.title,
+                    kindTitle: $0.kindTitle,
+                    when: relativeDescription(for: $0.createdAt, now: now)
+                )
+            },
+            hasResults: true
+        )
+    }
+
+    /// What a question with one answer gets when the answer could not be read
+    /// out of anything: a plain statement of that, and the closest few
+    /// documents rather than every one that shared a word with it.
+    static let unansweredLead = "I couldn't find a clear answer to that in your brain. These are the closest:"
+
     static func compose(
         query: String,
         sources: [AnswerSource],
         totalMatches: Int? = nil,
+        lead overriddenLead: String? = nil,
         now: Date = Date()
     ) -> Answer {
         let cleanQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -119,7 +144,10 @@ enum AnswerComposer {
 
         // The opening: what was found, and how much of it.
         let count = passages.count
-        if count == 1, let only = passages.first {
+        if let overriddenLead {
+            written.append(overriddenLead)
+            spoken.append(overriddenLead)
+        } else if count == 1, let only = passages.first {
             let lead = "Here's what I have on \(topic). It's in one \(only.source.kindTitle.lowercased()), saved \(relativeDescription(for: only.source.createdAt, now: now))."
             written.append(lead)
             spoken.append(lead)
@@ -378,7 +406,7 @@ enum AnswerComposer {
     ]
 
     /// The question as finally asked, with any false start before it dropped.
-    private static func lastQuestion(in query: String) -> String {
+    static func lastQuestion(in query: String) -> String {
         let words = query.split(whereSeparator: \.isWhitespace).map(String.init)
         // Too short to contain a restart worth finding.
         guard words.count > 3 else { return query }

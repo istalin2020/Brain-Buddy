@@ -659,7 +659,53 @@ question somewhere above the fold. The suggestions also stay hidden once a
 thread exists — five rows of "try asking" between the keyboard and the answer
 you just asked for left the answer a third of the screen.
 
-**The reply talks you through what it found.** *"Here's what I have on the
+**A question with one answer gets that answer.** *"What is my name?"* used to
+come back as five passages: the note saying *"My name is Joseph Stalin"*, a
+note about an API returning *"the food name"*, a bank slip, and two lab
+reports whose only relevant line was the word *Name*. Search was right to find
+them all; what was missing is the second half of every question-answering
+system since Facebook's DrQA. Search is the **retriever** — it finds the
+documents. A **reader** then finds the answer *inside* them. `AnswerExtractor`
+is that reader, on-device and without a model:
+
+1. **It reads the question for a slot.** *What is my X*, *what's the X*, *tell
+   me my X*, *when is my X*, *how much is the X*, *who am I*. The slot says what
+   shape the answer has — a name, a phone number, an email, a date, an amount,
+   a number, or a short phrase. A question about a list (*"what are my
+   reminders"*, *"what's on my purchase list"*) is not a one-answer question
+   and keeps the passage reply below.
+2. **It reads the documents for the ways people write a fact down.** *"My name
+   is …"*, *"Myself …"*, *"I'm …"*, *"Name: …"*, *"The rent is …"*, *"TSH
+   5.46"*. The span after the pattern is cut at the end of the thought —
+   *"Joseph Stalin, from Tirunelveli"* is *Joseph Stalin* — and must have the
+   right shape or it is thrown away: a name is one to five capitalised words
+   with no digits, so *"I am going to the market"* is not a name, and a form
+   label like *Age* never is. A value that runs straight into the next label,
+   as they do on scanned forms (*"JOSEPH STALIN KASPAR Beneficiary Account
+   Number: …"*), has that label taken back off.
+3. **It weighs the evidence.** Something you wrote about yourself beats a
+   label on a scan, which is good evidence that is often about someone else. A
+   better search rank counts. And documents that **agree** strengthen each
+   other: the note saying *Joseph Stalin* and two forms saying *JOSEPH STALIN
+   KASPAR* are one answer, three times.
+
+The reply is then just the answer — *"Your name is **Joseph Stalin**."* — with
+only the documents that say so listed under it, each showing the line it was
+read from, so you can see why it is there without opening it. Besides the
+search results the reader also looks through every note you wrote yourself,
+because *"Who am I?"* shares no word with *"My name is Joseph Stalin"* and
+search alone may never bring that note up. If nothing solid is found, it says
+*"I couldn't find a clear answer to that in your brain"* and lists the closest
+three rather than walking through everything that shared a word. It never
+guesses: below a confidence floor it says nothing.
+
+The natural upgrade is a learned reader in the same slot: Apple publishes a
+Core ML BERT model trained on SQuAD for exactly this span-extraction job,
+running on-device. It would handle phrasings no pattern list anticipates, at
+the cost of a download of a few hundred megabytes. The retriever, the evidence
+weighing and the reply format would stay as they are.
+
+**Every other question gets a reply that talks you through what it found.** *"Here's what I have on the
 insulator damage — 3 things in your brain mention it. Going through them:"*
 and then one passage per source — the note's name, what kind of thing it is
 and when it was saved, and **every line in it that bears on the question**,
