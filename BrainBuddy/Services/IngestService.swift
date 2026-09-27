@@ -503,6 +503,80 @@ final class IngestService {
             : "Already in your brain — “\(name)”."
     }
 
+    // MARK: - Reading scans again
+
+    private static let layoutVersionKey = "ocr.layoutVersion"
+
+    /// Reads every scan, photo and PDF again, once, after the way text is read
+    /// out of them has changed.
+    ///
+    /// Text is read at capture and stored, so a better reader does nothing for
+    /// what is already in your brain — and the documents already there are the
+    /// ones whose scrambled tables produced lines like "WHOLE BLOOD 13.20".
+    /// Returns how many documents were read again.
+    @discardableResult
+    func rereadDocumentsIfNeeded(in context: ModelContext) async -> Int {
+        let defaults = UserDefaults.standard
+        guard defaults.integer(forKey: Self.layoutVersionKey) < TextRecognizer.layoutVersion else { return 0 }
+        let count = await rereadDocuments(in: context)
+        defaults.set(TextRecognizer.layoutVersion, forKey: Self.layoutVersionKey)
+        return count
+    }
+
+    /// Reads every scan, photo and PDF again. Also offered in Settings.
+    ///
+    /// One document at a time, and only from what is on this device: an
+    /// attachment whose bytes are still in iCloud is skipped rather than
+    /// downloaded, and read again the next time this runs.
+    @discardableResult
+    func rereadDocuments(in context: ModelContext) async -> Int {
+        let descriptor = FetchDescriptor<MemoryItem>(predicate: #Predicate { !$0.isTrashed })
+        guard let items = try? context.fetch(descriptor) else { return 0 }
+        let readable = items.filter { item in
+            item.sortedAttachments.contains { $0.kind == .image || $0.kind == .pdf }
+        }
+        guard !readable.isEmpty else { return 0 }
+
+        // Not called `reread`: that would shadow the method called below.
+        var changed = 0
+        for (index, item) in readable.enumerated() {
+            activity = "Reading documents again · \(index + 1) of \(readable.count)"
+            guard await reread(item) else { continue }
+            await finalize(item, in: context)
+            changed += 1
+        }
+        activity = nil
+        return changed
+    }
+
+    /// Reads one document's attachments again. False when there was nothing
+    /// on the device to read, or nothing changed.
+    private func reread(_ item: MemoryItem) async -> Bool {
+        var pages: [String] = []
+        var readAnything = false
+
+        for attachment in item.sortedAttachments {
+            guard let payload = attachment.payload, !payload.isEmpty else { continue }
+            switch attachment.kind {
+            case .image:
+                guard let image = UIImage(data: payload) else { continue }
+                attachment.extractedText = await TextRecognizer.recognizeText(in: image)
+            case .pdf:
+                attachment.extractedText = await PDFTextExtractor.extract(from: payload).text
+            case .audio, .file:
+                continue
+            }
+            readAnything = true
+            if !attachment.extractedText.isEmpty { pages.append(attachment.extractedText) }
+        }
+
+        guard readAnything else { return false }
+        let text = pages.joined(separator: "\n\n")
+        guard text != item.extractedText else { return false }
+        item.extractedText = text
+        return true
+    }
+
     // MARK: - Duplicates already in the library
 
     /// Finds captures that arrived more than once before the app checked for

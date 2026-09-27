@@ -63,6 +63,12 @@ struct RootView: View {
                 services.brief.reconcileAll(in: modelContext)
             }
             services.collectPendingRequests()
+            // Once per change to how text is read out of images: scans saved
+            // before it keep their old, scrambled reading otherwise. Last, so
+            // nothing else waits on it, and search is rebuilt when it is done.
+            if await services.ingest.rereadDocumentsIfNeeded(in: modelContext) > 0 {
+                services.search.invalidateCache()
+            }
         }
         // A Spotlight result for one of your memories opens that memory.
         .onContinueUserActivity(CSSearchableItemActionType) { activity in

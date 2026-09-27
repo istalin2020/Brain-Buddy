@@ -242,11 +242,24 @@ final class SearchEngine {
            !best.contains(where: \.isNumber),
            bestIndex + 1 < lines.count {
             let follower = lines[bestIndex + 1]
-            if follower.contains(where: \.isNumber), best.count + follower.count + 1 <= limit {
+            if isStrandedValue(follower), best.count + follower.count + 1 <= limit {
                 best += " " + follower
             }
         }
         return clipped(best, to: limit)
+    }
+
+    /// Whether a line is a value left on its own by OCR — "5.46 uIU/mL" under
+    /// a "TSH" that lost it — and so belongs with the label above.
+    ///
+    /// It has to *start* with the number. The looser rule, "contains a number",
+    /// joined "Sample Type- WHOLE BLOOD" to whatever came next and printed
+    /// "WHOLE BLOOD 13.20", a result the report never gave. A line that starts
+    /// with words is a row of its own, whatever numbers it contains.
+    static func isStrandedValue(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.first, first.isNumber else { return false }
+        return trimmed.split(whereSeparator: \.isWhitespace).count <= 4
     }
 
     /// The lines of a document that bear on the question, best first, then put
@@ -305,7 +318,7 @@ final class SearchEngine {
             var line = lines[index]
             if !line.contains(where: \.isNumber), index + 1 < lines.count {
                 let follower = lines[index + 1]
-                if follower.contains(where: \.isNumber), line.count + follower.count + 1 <= lineLimit {
+                if isStrandedValue(follower), line.count + follower.count + 1 <= lineLimit {
                     line += " " + follower
                 }
             }

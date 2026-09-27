@@ -177,6 +177,22 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertTrue(snippet.contains("5.46"), "got “\(snippet)”")
     }
 
+    /// The reported line: "Sample Type- WHOLE BLOOD" joined to the next row's
+    /// result and shown as "WHOLE BLOOD 13.20". A line that starts with words
+    /// is a row of its own; only a number stranded on its own line is joined.
+    func testALabelIsNotGluedToTheNextRow() {
+        let report = """
+        Sample Type- WHOLE BLOOD
+        RDW (RED CELL DISTRIBUTION 36.50 fl 35 - 56
+        """
+        let snippet = SearchEngine.snippet(for: Tokenizer.queryTokens(in: "whole blood"), in: report)
+        XCTAssertFalse(snippet.contains("36.50"), "got “\(snippet)”")
+
+        XCTAssertTrue(SearchEngine.isStrandedValue("5.46 uIU/mL"))
+        XCTAssertFalse(SearchEngine.isStrandedValue("RDW CV 13.20 % 11 - 16"))
+        XCTAssertFalse(SearchEngine.isStrandedValue("13.20 11 16 remarks follow here"))
+    }
+
     func testAValueIsSearchableByItsOwnNumber() {
         let report = SearchDocument(id: UUID(), title: "Blood test", body: labReport)
         let results = engine.rank(query: "5.46", documents: [report])

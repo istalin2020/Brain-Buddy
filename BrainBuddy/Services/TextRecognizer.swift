@@ -4,7 +4,16 @@ import Vision
 
 /// On-device OCR. Every photo and scanned page goes through here so that images
 /// become searchable text instead of opaque blobs.
+///
+/// Recognition is Apple's; the reading order is ours. See `TextLayout` for why
+/// the boxes Vision returns are regrouped into printed rows rather than joined
+/// in the order they arrive.
 enum TextRecognizer {
+    /// Bumped whenever how text is read out of an image changes, so anything
+    /// read the old way is read again once — see
+    /// `IngestService.rereadDocumentsIfNeeded`.
+    static let layoutVersion = 2
+
     /// Recognizes text in an image, preserving reading order.
     static func recognizeText(in image: UIImage) async -> String {
         guard let cgImage = image.cgImage else { return "" }
@@ -30,9 +39,20 @@ enum TextRecognizer {
                     return
                 }
 
-                let observations = request.results ?? []
-                let lines = observations.compactMap { $0.topCandidates(1).first?.string }
-                continuation.resume(returning: lines.joined(separator: "\n"))
+                let pieces: [TextLayout.Piece] = (request.results ?? []).compactMap { observation in
+                    guard let text = observation.topCandidates(1).first?.string else { return nil }
+                    // The observation is a quadrilateral, so its top edge gives
+                    // the text's own slope — which is how a tilted photo of a
+                    // table is read back as level rows.
+                    let run = observation.topRight.x - observation.topLeft.x
+                    let rise = observation.topRight.y - observation.topLeft.y
+                    return TextLayout.Piece(
+                        text: text,
+                        box: observation.boundingBox,
+                        slope: run > 0.001 ? Double(rise / run) : 0
+                    )
+                }
+                continuation.resume(returning: TextLayout.text(from: pieces))
             }
         }
     }

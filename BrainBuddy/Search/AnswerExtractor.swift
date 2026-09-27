@@ -384,12 +384,30 @@ enum AnswerExtractor {
     static func clean(_ raw: String, kind: Kind) -> String? {
         var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        // A column break ends a value outright: on a form's header row the
+        // next cell is another field — "Mr. JOSEPH STALIN KASPAR⇥Age/Sex".
+        if let column = value.range(of: TextLayout.columnSeparator) {
+            value = String(value[..<column.lowerBound])
+        }
+
         // The value on a form runs straight into the next label: "JOSEPH
         // STALIN KASPAR Beneficiary Account Number: 000590…". Cut at the next
         // colon, then take the next label's words back off the end.
         if let colon = value.firstIndex(of: ":") {
             value = dropTrailingLabel(String(value[..<colon]))
         }
+
+        // "Mr. JOSEPH STALIN KASPAR": the title is the form's, not the name's.
+        // Taken off *before* the end of the thought is found, because the
+        // full stop after "Mr" would otherwise end it — leaving "Mr".
+        if kind == .name {
+            value = value.replacingOccurrences(
+                of: #"^\s*(?:mr|mrs|ms|miss|dr|master)\.?\s+"#,
+                with: "",
+                options: [.regularExpression, .caseInsensitive]
+            )
+        }
+
         if let end = value.range(of: valueEnd, options: [.regularExpression, .caseInsensitive]) {
             value = String(value[..<end.lowerBound])
         }
@@ -465,6 +483,41 @@ enum AnswerExtractor {
     private static func isAllCaps(_ word: String) -> Bool {
         let letters = word.filter(\.isLetter)
         return letters.count >= 2 && letters.allSatisfy(\.isUppercase)
+    }
+
+    // MARK: - When there is no answer
+
+    /// The lines that mention what was asked for, as a phrase.
+    ///
+    /// Asked for a blood group, a lab report with *"GROUP OF HOSPITALS"* in its
+    /// letterhead and *"WHOLE BLOOD"* under every test mentions both words and
+    /// never once a blood group. Words that turn up separately are not the
+    /// subject; only the slot's words, together and in order, are. Stopwords
+    /// are ignored on both sides, so "date of birth" is found as "Date of
+    /// Birth" and "DATE-OF-BIRTH" alike.
+    static func linesMentioning(_ question: Question, in text: String, limit: Int = 2) -> [String] {
+        let wanted = Tokenizer.tokens(in: question.slot)
+        guard !wanted.isEmpty else { return [] }
+
+        var found: [String] = []
+        for line in Tokenizer.sentences(in: text) {
+            let tokens = Tokenizer.tokens(in: line)
+            guard tokens.count >= wanted.count else { continue }
+            let mentions = (0...(tokens.count - wanted.count)).contains { start in
+                Array(tokens[start..<(start + wanted.count)]) == wanted
+            }
+            guard mentions else { continue }
+            found.append(clip(line.replacingOccurrences(of: TextLayout.columnSeparator, with: "  ")))
+            if found.count >= limit { break }
+        }
+        return found
+    }
+
+    /// The reply when nothing answers the question: plainly that, naming what
+    /// was asked for.
+    static func notFound(_ question: Question) -> String {
+        let owner = question.isPersonal ? "your" : "the"
+        return "I couldn't find \(owner) \(question.slot) in anything you've saved."
     }
 
     // MARK: - Agreement

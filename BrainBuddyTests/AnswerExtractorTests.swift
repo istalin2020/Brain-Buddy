@@ -145,6 +145,65 @@ final class AnswerExtractorTests: XCTestCase {
         XCTAssertEqual(answer.sentence, "The rent is \(answer.value).")
     }
 
+    // MARK: - Forms read as rows
+
+    /// The lab report's header row as the new layout step produces it: two
+    /// fields on one printed line, separated as columns, with a title.
+    func testANameIsReadOffARebuiltHeaderRow() throws {
+        let question = try XCTUnwrap(AnswerExtractor.question(from: "What is my name?"))
+        let header = "Patient Name : Mr. JOSEPH STALIN KASPAR" + TextLayout.columnSeparator + "Age/Sex : 40 Year(s) / Male"
+        let answer = try XCTUnwrap(AnswerExtractor.answer(
+            question,
+            in: [.init(id: UUID(), authored: "", extracted: "LABORATORY INVESTIGATION REPORT\n" + header, rank: 0)]
+        ))
+        XCTAssertEqual(answer.value, "Joseph Stalin Kaspar", "no title, and not the next column")
+    }
+
+    /// The full stop after "Mr" must not end the name before it starts.
+    func testATitleIsTakenOffBeforeTheEndOfTheThought() {
+        XCTAssertEqual(AnswerExtractor.clean("Mr. JOSEPH STALIN KASPAR", kind: .name), "JOSEPH STALIN KASPAR")
+        XCTAssertEqual(AnswerExtractor.clean("Dr. Alvarez, the dentist", kind: .name), "Alvarez")
+    }
+
+    // MARK: - When there is no answer
+
+    /// The reported case: the lab report has no blood group. It says "GROUP
+    /// OF HOSPITALS" and "WHOLE BLOOD", which are both words and neither one
+    /// the subject.
+    func testWordsThatTurnUpSeparatelyAreNotTheSubject() throws {
+        let question = try XCTUnwrap(AnswerExtractor.question(from: "What is my blood group?"))
+        let report = """
+        BADR AL SAMAA
+        GROUP OF HOSPITALS
+        RDW CV\t13.20\t%\t11 - 16
+        Sample Type-\tWHOLE BLOOD
+        BLOOD SUGAR[FASTING]\t6.67\tmmol/L
+        """
+        XCTAssertNil(AnswerExtractor.answer(question, in: [.init(id: UUID(), authored: "", extracted: report, rank: 0)]))
+        XCTAssertTrue(AnswerExtractor.linesMentioning(question, in: report).isEmpty)
+    }
+
+    func testThePhraseItselfIsFound() throws {
+        let question = try XCTUnwrap(AnswerExtractor.question(from: "What is my date of birth?"))
+        XCTAssertEqual(
+            AnswerExtractor.linesMentioning(question, in: "Name : JOSEPH\nDate of Birth : 22/08/1985\nNationality : Indian"),
+            ["Date of Birth : 22/08/1985"]
+        )
+    }
+
+    /// When a document does carry it, it is answered.
+    func testABloodGroupOnADonorCardIsRead() throws {
+        let question = try XCTUnwrap(AnswerExtractor.question(from: "What is my blood group?"))
+        let card = "DONOR CARD\nName : JOSEPH STALIN KASPAR" + TextLayout.columnSeparator + "Blood Group : O Positive"
+        let answer = try XCTUnwrap(AnswerExtractor.answer(question, in: [.init(id: UUID(), authored: "", extracted: card, rank: 0)]))
+        XCTAssertEqual(answer.value, "O Positive")
+    }
+
+    func testNotFoundNamesWhatWasAskedFor() throws {
+        let question = try XCTUnwrap(AnswerExtractor.question(from: "What is my blood group?"))
+        XCTAssertEqual(AnswerExtractor.notFound(question), "I couldn't find your blood group in anything you've saved.")
+    }
+
     // MARK: - Cleaning
 
     /// A form's value runs straight into the next label.

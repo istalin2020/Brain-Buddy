@@ -573,15 +573,7 @@ struct AskView: View {
                 )
             }
 
-            let closest = Array(hits.prefix(Self.closestForUnanswered))
-            return Reply(
-                answer: AnswerComposer.compose(
-                    query: question,
-                    sources: closest.map { answerSource($0, terms: Tokenizer.queryTokens(in: question)) },
-                    lead: closest.isEmpty ? nil : AnswerComposer.unansweredLead
-                ),
-                sources: closest
-            )
+            return unanswered(factoid, hits: hits)
         }
 
         let terms = Tokenizer.queryTokens(in: question)
@@ -595,6 +587,46 @@ struct AskView: View {
             // Every match worth having is listed, not only what the reply
             // quoted: the sixth match may be the one you were thinking of.
             sources: Array(hits.prefix(Self.sourcesListed))
+        )
+    }
+
+    /// A question with one answer that nothing answered.
+    ///
+    /// Says so, and lists only documents that mention what was asked for *as a
+    /// phrase*, each with the line that does. Asked for a blood group, the old
+    /// reply listed a lab report for "GROUP OF HOSPITALS" and "WHOLE BLOOD",
+    /// plus two notes that shared no word with the question at all — three
+    /// sources, none of them about a blood group. If nothing mentions it, the
+    /// reply is the one sentence and no sources: an empty list is the honest
+    /// one.
+    private func unanswered(_ question: AnswerExtractor.Question, hits: [SearchHit]) -> Reply {
+        var mentions: [SearchHit] = []
+        var evidence: [UUID: String] = [:]
+        for hit in hits {
+            let text = [hit.item.title, hit.item.text, hit.item.extractedText, hit.item.summary]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            guard let line = AnswerExtractor.linesMentioning(question, in: text, limit: 1).first else { continue }
+            mentions.append(hit)
+            evidence[hit.item.identifier] = line
+            if mentions.count >= Self.closestForUnanswered { break }
+        }
+
+        let lead = AnswerExtractor.notFound(question)
+        let written = mentions.isEmpty
+            ? lead
+            : lead + " " + (mentions.count == 1
+                ? "This mentions it, if you want to check:"
+                : "These mention it, if you want to check:")
+        return Reply(
+            answer: AnswerComposer.Answer(
+                spoken: lead,
+                written: written,
+                references: [],
+                hasResults: false
+            ),
+            sources: mentions,
+            evidence: evidence
         )
     }
 

@@ -12,7 +12,7 @@ struct SearchHit: Identifiable {
 
     /// Human-readable reason the row is here, shown under the snippet.
     var matchExplanation: String {
-        switch (lexicalScore > 0.15, semanticScore > 0.15) {
+        switch (lexicalScore > SearchEngine.meaningOnlyCeiling, semanticScore > 0.15) {
         case (true, true): return "keyword + meaning match"
         case (true, false): return "keyword match"
         case (false, true): return "meaning match"
@@ -36,8 +36,21 @@ extension SearchEngine {
     /// survives.
     static func confident(_ hits: [SearchHit], floor: Double = AnswerComposer.relevanceFloor) -> [SearchHit] {
         guard let best = hits.map(\.score).max(), best > 0 else { return hits }
-        return hits.filter { $0.score >= best * floor }
+        let strong = hits.filter { $0.score >= best * floor }
+
+        // A "meaning match" shares no word with the question. That is what
+        // semantic search is for when nothing matches by word — "that thing
+        // about sleeping better" — and it is noise when something does: asked
+        // for a blood group, a voice memo and a note about Mosdorfer were
+        // listed as sources because a sentence embedding found them vaguely
+        // near. So they are kept only when nothing matched by word.
+        let byWord = strong.filter { $0.lexicalScore > meaningOnlyCeiling }
+        return byWord.isEmpty ? strong : byWord
     }
+
+    /// Below this share of the best keyword score, a hit is there on meaning
+    /// alone — the same line `SearchHit.matchExplanation` draws.
+    static let meaningOnlyCeiling = 0.15
 
     /// Bridges stored memories into the pure ranking layer and back.
     func search(query: String, in items: [MemoryItem], limit: Int = 30) -> [SearchHit] {

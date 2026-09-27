@@ -115,11 +115,6 @@ enum AnswerComposer {
         )
     }
 
-    /// What a question with one answer gets when the answer could not be read
-    /// out of anything: a plain statement of that, and the closest few
-    /// documents rather than every one that shared a word with it.
-    static let unansweredLead = "I couldn't find a clear answer to that in your brain. These are the closest:"
-
     static func compose(
         query: String,
         sources: [AnswerSource],

@@ -62,6 +62,28 @@ that the original lacks — a summary you saved, a title you typed, a tag — mo
 across first. The copies go to the **trash**, not away, so a wrong guess costs a
 tap and not a document; and the brief drops whatever lines were quoting them.
 
+**Tables are read as the rows they were printed in.** Apple's recognizer reads
+characters very well and returns each run of text as its own box — a lab
+report's `RDW CV`, `13.20`, `%` and `11 - 16` are four boxes. Joining them in
+the order they come back scrambled the table: one report's *"Sample Type-
+WHOLE BLOOD"* landed next to *"13.20"*, the result from the row above, and the
+app then showed *"WHOLE BLOOD 13.20"* as if the report said it. It never did.
+The characters were right; the reading order was not. So `TextLayout` runs the
+layout step every OCR pipeline has after recognition — PaddleOCR and docTR
+both do a version of it: boxes whose vertical centres line up are one row, and
+a row reads left to right. Two refinements make it hold on photographs rather
+than clean scans. **Tilt:** a phone photo is never level, and across a wide
+table one or two degrees moves the right-hand column by half a row, so the
+page's slope is measured from the text boxes' own edges and every box is
+compared at the same horizontal position before rows are formed. **Columns:**
+cells far apart on a row are separated by a tab, so *"Patient Name : Mr.
+JOSEPH STALIN KASPAR"* and *"Age/Sex : 40"* on one printed line stay two facts.
+Scanned PDF pages are also rendered at about 300 dpi before recognition rather
+than twice their point size, which left a report's small print eight pixels
+tall. Everything already saved is **read again once**, automatically, the
+first time the app opens after an update to the reader; *Settings ›
+Maintenance › Read scans, photos and PDFs again* runs it on demand.
+
 **Documents are read when they arrive.** A scan, a PDF, a screenshot or a
 recording lands as a wall of text with no shape to it, and leaving that until
 somebody presses *Create summary* made the library a list of first lines. Now the
@@ -694,10 +716,26 @@ only the documents that say so listed under it, each showing the line it was
 read from, so you can see why it is there without opening it. Besides the
 search results the reader also looks through every note you wrote yourself,
 because *"Who am I?"* shares no word with *"My name is Joseph Stalin"* and
-search alone may never bring that note up. If nothing solid is found, it says
-*"I couldn't find a clear answer to that in your brain"* and lists the closest
-three rather than walking through everything that shared a word. It never
-guesses: below a confidence floor it says nothing.
+search alone may never bring that note up. It never guesses: below a
+confidence floor it says nothing.
+
+**When there is no answer, it says so — and lists nothing that isn't about
+it.** Asked for a blood group, a lab report that never states one used to be
+offered as the closest source because its letterhead says *"GROUP OF
+HOSPITALS"* and every test is marked *"WHOLE BLOOD"* — both words, neither the
+subject — alongside two notes that shared no word with the question at all.
+Now the reply is *"I couldn't find your blood group in anything you've
+saved."*, and a document is listed under it only if it mentions what was asked
+for **as a phrase**, the slot's words together and in order, with the line that
+does. If nothing does, there are no sources, because an empty list is the
+honest one.
+
+**Meaning-only matches are a fallback, not a source.** A result found purely by
+sentence embedding shares no word with the question. That is what semantic
+search is for when nothing matches by word — *"that thing about sleeping
+better"* — and it is noise when something does, which is how a voice memo and
+a note about Mosdorfer were listed under a question about a blood group. They
+are kept only when nothing matched by word.
 
 The natural upgrade is a learned reader in the same slot: Apple publishes a
 Core ML BERT model trained on SQuAD for exactly this span-extraction job,

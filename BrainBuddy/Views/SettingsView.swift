@@ -338,6 +338,13 @@ struct SettingsView: View {
                 Label("Merge duplicate captures", systemImage: "doc.on.doc")
             }
 
+            Button {
+                rereadDocuments()
+            } label: {
+                Label("Read scans, photos and PDFs again", systemImage: "doc.text.viewfinder")
+            }
+            .disabled(services.ingest.isBusy)
+
             if let mergeNotice {
                 Text(mergeNotice)
                     .font(.caption)
@@ -346,7 +353,7 @@ struct SettingsView: View {
         } header: {
             Text("Maintenance")
         } footer: {
-            Text("Rebuilding re-derives the subject of everything you haven't titled yourself and rebuilds the search index; nothing is deleted, and titles you typed are left alone. Merging finds the same document saved more than once — the same screenshot shared twice, a PDF imported again — keeps the oldest copy, and moves the rest to the trash. It also runs by itself each time the app opens.")
+            Text("Rebuilding re-derives the subject of everything you haven't titled yourself and rebuilds the search index; nothing is deleted, and titles you typed are left alone. Merging finds the same document saved more than once — the same screenshot shared twice, a PDF imported again — keeps the oldest copy, and moves the rest to the trash. It also runs by itself each time the app opens. Reading again runs text recognition over every scan, photo and PDF with the current reader, so tables come back as the rows they were printed in.")
         }
     }
 
@@ -380,6 +387,17 @@ struct SettingsView: View {
             }
             services.search.invalidateCache()
             reindexProgress = nil
+        }
+    }
+
+    private func rereadDocuments() {
+        mergeNotice = "Reading your documents again…"
+        Task {
+            let count = await services.ingest.rereadDocuments(in: modelContext)
+            services.search.invalidateCache()
+            mergeNotice = count == 1
+                ? "1 document read again."
+                : "\(count) documents read again."
         }
     }
 
