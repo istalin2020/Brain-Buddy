@@ -15,7 +15,7 @@ Built with SwiftUI + SwiftData (CloudKit mirroring), iOS 17+.
 | Input | How it's handled |
 | --- | --- |
 | **Text** | Typed straight into the capture box. `#hashtags` become tags automatically. |
-| **Dictation** | A mic inside the capture box types what you say into the note as you say it, so you can speak a thought and still edit it before saving. Distinct from a voice note: this is a keyboard, that keeps the recording. It runs continuously — pause for a minute if you like, nothing already dictated is lost — and only you end it. |
+| **Dictation** | A mic inside the capture box types what you say into the note as you say it, **at the cursor**, so you can speak a thought and edit it — even while it is still listening. Distinct from a voice note: this is a keyboard, that keeps the recording. It runs continuously — pause for a minute if you like, nothing already dictated is lost — and only you end it. |
 | **Voice** | Recorded to AAC, saved immediately, then transcribed with `SFSpeechRecognizer` (on-device when available). Keeps recording with the screen off, so you can capture a whole discussion. Afterwards you get the transcript, and can turn it into a saved summary. |
 | **Image** | Photo library or camera. Text is pulled out with Vision OCR so photos are searchable by their contents. |
 | **Scan** | VisionKit's document scanner — edge detection and perspective correction, then OCR per page. |
@@ -28,15 +28,22 @@ Built with SwiftUI + SwiftData (CloudKit mirroring), iOS 17+.
 **Two buttons, one meaning each.** The capture box carries a **mic** and, next
 to it, a button that is either **✓** or **↑** — and there is no Save in the
 toolbar, because saving belongs where you are already looking. Idle, the pair
-reads *speak* and *save*. Tap the mic and it becomes a waveform while the tick
-takes its place: **✓ accepts what you said into the box**, and only then does the
+reads *speak* and *save*. Tap the mic and it becomes a **stop** button while the
+tick takes its place: **✓ accepts what you said into the box**, and only then does the
 button turn back into **↑ to save**.
 
 Accepting and saving are deliberately two decisions. A dictated sentence almost
 always has one word the recognizer got wrong, and a single button that stopped
 listening *and* filed the note would save it before you had a chance to fix it.
-Tapping the waveform finishes the same way the tick does, so no gesture on this
+Tapping stop finishes the same way the tick does, so no gesture on this
 screen can lose words you have already spoken.
+
+**Dictation writes at the cursor and never undoes your edits.** Only the words
+still being heard are ever rewritten (`DictationSplice`). Fix a word, delete a
+phrase or type a comma while the mic is listening and it stays that way — the
+next words, stop, ✓ and ↑ all leave it alone. Move the cursor somewhere else and
+the next words go there. The box is a `UITextView` wrapper (`DraftTextView`),
+because SwiftUI's `TextEditor` cannot report the cursor on iOS 17.
 
 **The same thing saved twice is saved once.** Every door into this app favours
 never losing a capture over never repeating one — the share extension and the

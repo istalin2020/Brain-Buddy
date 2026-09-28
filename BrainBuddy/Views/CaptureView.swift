@@ -18,21 +18,28 @@ struct CaptureView: View {
     private var memories: [MemoryItem]
 
     @State private var draft: String = ""
+    /// Where the cursor is in `draft`, in the text view's own units. Dictation
+    /// starts here, and follows it if you move it while speaking.
+    @State private var selection = NSRange(location: 0, length: 0)
     @State private var showVoiceCapture = false
     @State private var showPhotoPicker = false
     @State private var showScanner = false
     @State private var showFileImporter = false
     @State private var photoSelections: [PhotosPickerItem] = []
     @State private var errorMessage: String?
-    /// The draft as it stood when dictation started. Non-nil exactly while *this*
-    /// screen owns the recognizer, which is also how the UI knows to show itself
-    /// as listening — `transcriber.isListening` alone would light up while the
-    /// Ask tab is the one holding the microphone.
-    @State private var dictationBase: String?
-    @FocusState private var isEditorFocused: Bool
+    /// Where the words being heard sit in the note. Non-nil exactly while
+    /// *this* screen owns the recognizer, which is also how the UI knows to
+    /// show itself as listening — `transcriber.isListening` alone would light
+    /// up while the Ask tab is the one holding the microphone.
+    ///
+    /// It used to be a snapshot of the whole note, rebuilt as *snapshot +
+    /// everything heard* on every word — which erased any edit made while
+    /// listening and could only ever add at the end. See `DictationSplice`.
+    @State private var dictation: DictationSplice?
+    @State private var isEditorFocused = false
 
     private var transcriber: SpeechTranscriber { services.transcriber }
-    private var isDictating: Bool { dictationBase != nil }
+    private var isDictating: Bool { dictation != nil }
 
     private var recentMemories: [MemoryItem] { Array(memories.prefix(4)) }
 
@@ -94,14 +101,14 @@ struct CaptureView: View {
                 guard !newValue.isEmpty else { return }
                 importPhotos(newValue)
             }
-            // Words appear in the note as they're recognized, rather than in a
-            // separate preview that gets copied over at the end.
+            // Words appear in the note as they're recognized, at the cursor,
+            // rather than in a separate preview that gets copied over at the end.
             .onChange(of: transcriber.liveTranscript) { _, spoken in
                 // The `isListening` half matters on the way out: cancelling
                 // blanks the live transcript, and without this the blank would
                 // be merged in and wipe what was just dictated.
-                guard let base = dictationBase, transcriber.isListening else { return }
-                draft = Self.appending(spoken, to: base)
+                guard transcriber.isListening else { return }
+                hear(spoken)
             }
             .onDisappear { if isDictating { transcriber.cancelListening() } }
             .onChange(of: services.ingest.lastError) { _, newValue in
@@ -135,12 +142,16 @@ struct CaptureView: View {
                         .padding(.leading, 5)
                         .allowsHitTesting(false)
                 }
-                TextEditor(text: $draft)
+                DraftTextView(
+                    text: draft,
+                    selection: selection,
+                    isFocused: $isEditorFocused,
                     // Trimmed to pay for the taller mic below it, so the box as
                     // a whole didn't grow back.
-                    .frame(minHeight: 104)
-                    .scrollContentBackground(.hidden)
-                    .focused($isEditorFocused)
+                    minHeight: 104,
+                    onEdit: userEdited,
+                    onSelect: userSelected
+                )
             }
             .padding(8)
             // Room along the bottom edge for the two controls, so growing text
@@ -161,7 +172,7 @@ struct CaptureView: View {
             }
             .animation(.easeInOut(duration: 0.2), value: isDictating)
 
-            Text("Mic types what you say. Tap ✓ to take the words, correct anything, then ↑ to save. “Voice note” below keeps the recording itself.")
+            Text("Mic types what you say at the cursor — you can edit while it listens. Tap stop or ✓ when done, then ↑ to save. “Voice note” below keeps the recording itself.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
 
@@ -177,14 +188,16 @@ struct CaptureView: View {
         }
     }
 
-    /// Left of the pair: starts dictating, and shows that it is.
+    /// Left of the pair: starts dictating, and stops it.
     ///
-    /// While listening it is a waveform, and tapping it finishes the same way the
-    /// tick does. Two ways to stop is deliberate — there is no gesture here that
-    /// can lose words you have already spoken.
+    /// While listening it is a **stop** button. It used to be a waveform, which
+    /// says "sound is happening" and not "tap here to finish" — the one thing
+    /// the control is for. Tapping it finishes the same way the tick does. Two
+    /// ways to stop is deliberate: there is no gesture here that can lose words
+    /// you have already spoken.
     private var micButton: some View {
         Button(action: toggleDictation) {
-            Image(systemName: isDictating ? "waveform.circle.fill" : "mic.circle.fill")
+            Image(systemName: isDictating ? "stop.circle.fill" : "mic.circle.fill")
                 // Sized to be hit without looking, mid-thought, one-handed.
                 .font(.system(size: 34))
                 .symbolEffect(.pulse, isActive: isDictating)
@@ -194,7 +207,7 @@ struct CaptureView: View {
         .buttonStyle(.plain)
         .padding(6)
         .disabled(services.ingest.isBusy)
-        .accessibilityLabel(isDictating ? "Stop listening" : "Dictate into this note")
+        .accessibilityLabel(isDictating ? "Stop dictating" : "Dictate into this note at the cursor")
     }
 
     /// Right of the pair, and it means one thing at a time.
@@ -232,7 +245,7 @@ struct CaptureView: View {
                 Image(systemName: "dot.radiowaves.left.and.right")
                 Text(transcriber.liveTranscript.isEmpty
                      ? "Listening…"
-                     : "Pause as long as you like · tap ✓ when done")
+                     : "Edit or move the cursor any time · tap stop when done")
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
@@ -360,14 +373,15 @@ struct CaptureView: View {
     }
 
     private func saveDraft() {
-        // Saving mid-dictation must not drop the words already recognized but not
-        // yet merged into the draft, so take them explicitly before cancelling.
-        if let base = dictationBase {
-            draft = Self.appending(transcriber.liveTranscript, to: base)
+        // The words heard so far are already in the note — the splice puts them
+        // there as they arrive — so stopping first loses nothing.
+        if isDictating {
             transcriber.cancelListening()
+            dictation = nil
         }
         let text = draft
         draft = ""
+        selection = NSRange(location: 0, length: 0)
         isEditorFocused = false
         // Clear last time's notice so the one this capture produces — or the
         // absence of one — is unambiguous.
@@ -394,16 +408,18 @@ struct CaptureView: View {
             return
         }
 
-        let base = draft
-        dictationBase = base
-        isEditorFocused = false
+        // Starts where the cursor is. The keyboard is left as it is: if it is
+        // up you can see the cursor and edit while speaking, and if it is down
+        // the cursor is still where you last left it.
+        dictation = DictationSplice(text: draft, cursor: selection)
 
         transcriber.onFinalTranscript = { spoken in
-            // The final pass is better punctuated than the partial results, so it
-            // replaces rather than appends to what's on screen.
-            draft = Self.appending(spoken, to: base)
+            // The final pass is better punctuated than the partial results. It
+            // goes through the splice, so it can only reword the words still
+            // live — never anything you typed or corrected.
+            hear(spoken)
         }
-        transcriber.onSessionEnd = { dictationBase = nil }
+        transcriber.onSessionEnd = { dictation = nil }
 
         Task {
             do {
@@ -411,23 +427,44 @@ struct CaptureView: View {
                 // Starting is asynchronous — it may wait on a permission prompt —
                 // and a tab change ends the session in the meantime. If that
                 // happened, don't leave a recognizer running with no owner.
-                if dictationBase == nil { transcriber.cancelListening() }
+                if dictation == nil { transcriber.cancelListening() }
             } catch {
-                dictationBase = nil
+                dictation = nil
                 errorMessage = error.localizedDescription
             }
         }
     }
 
-    /// Joins dictated text onto the draft, inserting a space only where one is
-    /// actually missing — so speaking twice doesn't run words together, and
-    /// doesn't leave a gap after a newline either.
-    static func appending(_ spoken: String, to base: String) -> String {
-        let addition = spoken.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !addition.isEmpty else { return base }
-        guard !base.isEmpty else { return addition }
-        let separator = (base.last?.isWhitespace ?? false) ? "" : " "
-        return base + separator + addition
+    /// Words heard: they go into the live span, and the cursor follows them.
+    private func hear(_ spoken: String) {
+        guard var splice = dictation else { return }
+        splice.hear(spoken)
+        dictation = splice
+        draft = splice.text
+        selection = splice.caret
+    }
+
+    /// You typed, deleted or pasted. While dictating, the splice works out
+    /// where the words being heard are now; otherwise it is just typing.
+    private func userEdited(_ text: String, _ cursor: NSRange) {
+        if var splice = dictation {
+            splice.userEdited(to: text, selection: cursor)
+            dictation = splice
+        }
+        draft = text
+        selection = cursor
+    }
+
+    /// You moved the cursor. Ignored if the text on screen is not the text we
+    /// hold — that is a cursor move arriving just ahead of its own edit, and
+    /// the edit carries the same cursor.
+    private func userSelected(_ text: String, _ cursor: NSRange) {
+        guard text == draft else { return }
+        if var splice = dictation {
+            splice.userMoved(cursor)
+            dictation = splice
+        }
+        selection = cursor
     }
 
     private func importPhotos(_ selections: [PhotosPickerItem]) {
