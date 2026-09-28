@@ -42,9 +42,18 @@ struct AskView: View {
     @State private var scrollTarget: UUID?
     @State private var scrollToken = 0
 
-    @FocusState private var isFieldFocused: Bool
+    /// Where the cursor is in `query`, in the text view's own units. Spoken
+    /// words go in here.
+    @State private var selection = NSRange(location: 0, length: 0)
+    /// The words being heard, and where they sit in the box. Non-nil exactly
+    /// while *this* screen owns the recognizer — the same splice the Input box
+    /// uses, so what you type or fix while speaking is never undone by the
+    /// next word heard. See `DictationSplice`.
+    @State private var dictation: DictationSplice?
+    @State private var isFieldFocused = false
 
     private var transcriber: SpeechTranscriber { services.transcriber }
+    private var isDictating: Bool { dictation != nil }
 
     /// True between sending a question and its reply landing.
     private var isAwaitingReply: Bool { turns.contains { $0.answer == nil } }
@@ -73,8 +82,15 @@ struct AskView: View {
                 // is collected on appearance as well as on change.
                 .task { consumePendingQuestion() }
                 .onChange(of: services.pendingQuestion) { _, _ in consumePendingQuestion() }
+                // Words appear in the box as they are recognised, at the cursor.
+                .onChange(of: transcriber.liveTranscript) { _, spoken in
+                    // Cancelling blanks the live transcript; without this the
+                    // blank would be merged in.
+                    guard transcriber.isListening else { return }
+                    hear(spoken)
+                }
                 .onDisappear {
-                    transcriber.cancelListening()
+                    if isDictating { transcriber.cancelListening() }
                     services.speaker.stop()
                 }
                 .alert(
@@ -312,7 +328,7 @@ struct AskView: View {
         .padding(.bottom, 8)
         .background(.bar)
         .animation(.easeInOut(duration: 0.2), value: showsSuggestions)
-        .animation(.easeInOut(duration: 0.2), value: transcriber.isListening)
+        .animation(.easeInOut(duration: 0.2), value: isDictating)
     }
 
     /// Only while there is nothing to read.
@@ -323,7 +339,7 @@ struct AskView: View {
     /// get the rest. Once a conversation exists, the space belongs to it;
     /// *New conversation* brings the suggestions back.
     private var showsSuggestions: Bool {
-        turns.isEmpty && !transcriber.isListening
+        turns.isEmpty && !isDictating
     }
 
     private var suggestionList: some View {
@@ -367,26 +383,33 @@ struct AskView: View {
     }
 
     private var inputRow: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            Group {
-                if transcriber.isListening {
-                    Text(transcriber.liveTranscript.isEmpty ? "Listening…" : transcriber.liveTranscript)
-                        .font(.body)
-                        .foregroundStyle(transcriber.liveTranscript.isEmpty ? .secondary : .primary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    TextField("Ask anything you've saved…", text: $query, axis: .vertical)
-                        .font(.body)
-                        .lineLimit(1...5)
-                        .focused($isFieldFocused)
-                        .submitLabel(.send)
-                        .onSubmit { ask(query) }
+        HStack(alignment: .bottom, spacing: 4) {
+            ZStack(alignment: .topLeading) {
+                if query.isEmpty {
+                    Text(isDictating ? "Listening…" : "Ask anything you've saved…")
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 8)
+                        .padding(.leading, 5)
+                        .allowsHitTesting(false)
                 }
+                // Editable while the mic listens, like the Input box: the
+                // words land at the cursor and your edits stay.
+                DraftTextView(
+                    text: query,
+                    selection: selection,
+                    isFocused: $isFieldFocused,
+                    minHeight: 36,
+                    // About five lines, then it scrolls.
+                    maxHeight: 130,
+                    onReturn: { ask(query) },
+                    onEdit: userEdited,
+                    onSelect: userSelected
+                )
             }
-            .padding(.vertical, 9)
-            .padding(.leading, 4)
+            .padding(.vertical, 2)
 
-            trailingButton
+            micButton
+            if canSend { sendButton }
         }
         .padding(.leading, 12)
         .padding(.trailing, 6)
@@ -394,64 +417,112 @@ struct AskView: View {
         .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
-    /// One button, three jobs, decided by what you're doing: listening shows
-    /// Stop, typed text shows Send, and an empty box shows the microphone.
-    @ViewBuilder
-    private var trailingButton: some View {
-        if transcriber.isListening {
-            Button(action: toggleListening) {
-                Image(systemName: "waveform.circle.fill")
-                    .font(.system(size: 32))
-                    .symbolEffect(.pulse, isActive: true)
-                    .foregroundStyle(Color.red)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Stop listening")
-        } else if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            Button {
-                ask(query)
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 32))
-                    .foregroundStyle(Color.accentColor)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Send")
-        } else {
-            Button(action: toggleListening) {
-                Image(systemName: "mic.circle.fill")
-                    .font(.system(size: 32))
-                    .foregroundStyle(Color.accentColor)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Ask by voice")
+    private var canSend: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Always there, so you can put the cursor anywhere in a question and
+    /// speak into it. While listening it is a **stop** button — a waveform
+    /// said "sound is happening", not "tap here to finish".
+    private var micButton: some View {
+        Button(action: toggleListening) {
+            Image(systemName: isDictating ? "stop.circle.fill" : "mic.circle.fill")
+                .font(.system(size: 32))
+                .symbolEffect(.pulse, isActive: isDictating)
+                .foregroundStyle(isDictating ? Color.red : Color.accentColor)
+                .contentTransition(.symbolEffect(.replace))
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isDictating ? "Stop listening" : "Ask by voice, at the cursor")
+    }
+
+    /// Sends whatever is in the box, as you left it — including while the
+    /// mic is still listening, since the words heard so far are already there.
+    private var sendButton: some View {
+        Button {
+            ask(query)
+        } label: {
+            Image(systemName: "arrow.up.circle.fill")
+                .font(.system(size: 32))
+                .foregroundStyle(Color.accentColor)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Send")
     }
 
     // MARK: - Actions
 
+    /// Speaks into the box at the cursor. It no longer empties the box or
+    /// sends by itself: what you said stays there to check, fix or add to,
+    /// and ↑ sends it.
     private func toggleListening() {
         services.speaker.stop()
-        if transcriber.isListening {
+        if isDictating {
+            // Ends audio capture; the recognizer's final, punctuated pass lands
+            // a moment later through `onFinalTranscript`.
             transcriber.stopListening()
             return
         }
-        isFieldFocused = false
-        query = ""
+        // The Input tab holds the microphone. Leave it alone rather than
+        // fighting over one recognizer.
+        guard !transcriber.isListening else {
+            errorMessage = "Dictation is already running on the Input tab. Stop it there first."
+            return
+        }
+
+        dictation = DictationSplice(text: query, cursor: selection)
 
         // Assigned here rather than when the view appears: the capture editor
         // dictates through the same recognizer, and whichever screen starts a
-        // session owns its result.
-        transcriber.onFinalTranscript = { text in ask(text) }
-        transcriber.onSessionEnd = nil
+        // session owns its result. The final pass goes through the splice, so
+        // it can only reword the words still live.
+        transcriber.onFinalTranscript = { spoken in hear(spoken) }
+        transcriber.onSessionEnd = { dictation = nil }
 
         Task {
             do {
+                // Stops by itself after a pause — questions are short.
                 try await transcriber.startListening()
+                // Starting can wait on a permission prompt, and leaving the tab
+                // ends the session meanwhile. Don't leave a recognizer running
+                // with no owner.
+                if dictation == nil { transcriber.cancelListening() }
             } catch {
+                dictation = nil
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    /// Words heard: they go into the live span, and the cursor follows them.
+    private func hear(_ spoken: String) {
+        guard var splice = dictation else { return }
+        splice.hear(spoken)
+        dictation = splice
+        query = splice.text
+        selection = splice.caret
+    }
+
+    /// You typed, deleted or pasted. While listening, the splice works out
+    /// where the words being heard are now; otherwise it is just typing.
+    private func userEdited(_ text: String, _ cursor: NSRange) {
+        if var splice = dictation {
+            splice.userEdited(to: text, selection: cursor)
+            dictation = splice
+        }
+        query = text
+        selection = cursor
+    }
+
+    /// You moved the cursor. Ignored if the text on screen is not the text we
+    /// hold — a cursor move arriving just ahead of its own edit.
+    private func userSelected(_ text: String, _ cursor: NSRange) {
+        guard text == query else { return }
+        if var splice = dictation {
+            splice.userMoved(cursor)
+            dictation = splice
+        }
+        selection = cursor
     }
 
     /// Runs a question handed over by Siri or the Shortcuts app, once.
@@ -486,7 +557,14 @@ struct AskView: View {
         guard !trimmed.isEmpty, !isAwaitingReply else { return }
 
         services.speaker.stop()
+        // The words heard so far are already in the box, so stopping loses
+        // nothing that is being sent.
+        if isDictating {
+            transcriber.cancelListening()
+            dictation = nil
+        }
         query = ""
+        selection = NSRange(location: 0, length: 0)
         // The answer is the point, and it is taller than the third of a screen
         // the keyboard would leave it.
         isFieldFocused = false

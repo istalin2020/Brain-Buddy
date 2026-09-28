@@ -801,7 +801,11 @@ all the things are What all the things are there on my purchase list?"* is a
 false start followed by the real question. People restart forwards, never
 backwards, so everything before the last question word is discarded.
 
-Tap the microphone and the same pipeline runs on live dictation.
+Tap the microphone and you can speak the question instead. It works like the
+Input box: the words go in **at the cursor**, you can edit them while it is still
+listening, the mic turns into a red **stop** button, and nothing is sent until
+you press **↑** — so you can fix a misheard word first. The mic stays next to the
+box even when it has text, so you can put the cursor anywhere and speak into it.
 
 **Replies are silent.** They appear as text, and a **Read aloud** button under
 each hands it to `AVSpeechSynthesizer` when *you* ask for it. An app that

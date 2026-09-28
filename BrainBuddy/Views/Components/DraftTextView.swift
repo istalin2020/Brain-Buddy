@@ -15,11 +15,19 @@ import UIKit
 /// Changes the app makes itself — words arriving while you dictate — are
 /// applied without echoing back as either, so they can never be mistaken for
 /// something you did.
+///
+/// Used by both the Input box and the Ask box. The Ask box is the short one:
+/// it stops growing at `maxHeight` and scrolls instead, and its return key
+/// sends (`onReturn`) rather than starting a new line.
 struct DraftTextView: UIViewRepresentable {
     let text: String
     let selection: NSRange
     @Binding var isFocused: Bool
     var minHeight: CGFloat = 104
+    /// Taller than this, the box scrolls rather than growing. `nil` grows forever.
+    var maxHeight: CGFloat?
+    /// When set, return calls this instead of typing a new line.
+    var onReturn: (() -> Void)?
     var onEdit: (String, NSRange) -> Void
     var onSelect: (String, NSRange) -> Void
 
@@ -34,6 +42,7 @@ struct DraftTextView: UIViewRepresentable {
         view.isScrollEnabled = false
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         view.delegate = context.coordinator
+        if onReturn != nil { view.returnKeyType = .send }
         view.text = text
         return view
     }
@@ -76,7 +85,14 @@ struct DraftTextView: UIViewRepresentable {
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
         let width = proposal.width ?? 320
         let fitted = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
-        return CGSize(width: width, height: max(minHeight, fitted.height))
+        var height = max(minHeight, fitted.height)
+        if let maxHeight {
+            // Past the cap the text scrolls inside the box instead.
+            let overflows = height > maxHeight
+            if uiView.isScrollEnabled != overflows { uiView.isScrollEnabled = overflows }
+            height = min(height, maxHeight)
+        }
+        return CGSize(width: width, height: height)
     }
 
     @MainActor
@@ -87,6 +103,12 @@ struct DraftTextView: UIViewRepresentable {
 
         init(_ parent: DraftTextView) {
             self.parent = parent
+        }
+
+        func textView(_ view: UITextView, shouldChangeTextIn range: NSRange, replacementText replacement: String) -> Bool {
+            guard replacement == "\n", let onReturn = parent.onReturn else { return true }
+            onReturn()
+            return false
         }
 
         func textViewDidChange(_ view: UITextView) {
