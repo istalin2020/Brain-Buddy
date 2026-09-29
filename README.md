@@ -125,6 +125,10 @@ there are fewer open items than slots — so three tasks cycle across seven
 reminders rather than one being repeated all day. Both the start time and the count
 (1–12) are in Settings › Morning brief.
 
+Only things you have to **do** are notified: lines on the **Reminders**, **Office
+to-do** and **Personal to-do** cards. **Important info** — *"My blood group is
+B+"* — stays on Today and in your brain, but never interrupts you.
+
 A notification's text is fixed when it's scheduled — iOS doesn't wake the app at
 fire time to ask what to say — so the whole set is rebuilt whenever the brief
 changes: after a rebuild, after you close or remove a line, and when the app

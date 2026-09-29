@@ -323,6 +323,26 @@ final class BriefResyncTests: XCTestCase {
         XCTAssertEqual(entries().count, 2)
     }
 
+    /// Notifications are for what you have to do. "My blood group is B+" sits
+    /// under Important info on Today and never interrupts you.
+    func testOnlyRemindersAndToDosAreNotified() throws {
+        let day = Calendar.current.startOfDay(for: Date())
+        let lines: [(BriefEntryKind, String)] = [
+            (.point, "My blood group is B+"),
+            (.task, "Remind me to buy hand shower hose pipe when I reach any super market"),
+            (.task, "Purchase a black belt")
+        ]
+        for (index, line) in lines.enumerated() {
+            context.insert(BriefEntry(day: day, kind: line.0, text: line.1, sortIndex: index))
+        }
+        try context.save()
+
+        let notified = brief.openSubjects(in: context)
+        XCTAssertFalse(notified.contains { $0.localizedCaseInsensitiveContains("blood group") }, "\(notified)")
+        XCTAssertTrue(notified.contains { $0.localizedCaseInsensitiveContains("hand shower") }, "\(notified)")
+        XCTAssertTrue(notified.contains { $0.localizedCaseInsensitiveContains("black belt") }, "\(notified)")
+    }
+
     /// A summary the app wrote from a scan is on the same footing as the OCR it
     /// came from: readable, and not something you committed to.
     func testAnAutomaticSummaryStaysOutOfTheBrief() throws {

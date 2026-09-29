@@ -22,6 +22,16 @@ enum BriefGroupKind: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    /// The cards that ask something of you — the only ones the day's
+    /// notifications are dealt from. Information and finished lines stay on
+    /// Today, but don't interrupt you.
+    var isSomethingToDo: Bool {
+        switch self {
+        case .reminders, .office, .personal: return true
+        case .info, .done: return false
+        }
+    }
+
     var title: String {
         switch self {
         case .reminders: return "Reminders"

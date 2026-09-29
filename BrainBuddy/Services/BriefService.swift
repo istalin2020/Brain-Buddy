@@ -136,11 +136,16 @@ final class BriefService {
         return added
     }
 
-    /// Everything still open, newest day first, as the subject each row leads with.
+    /// Everything still open that you have to *do*, newest day first, as the
+    /// subject each row leads with.
     ///
-    /// This is what the day's reminders are dealt from. Closed lines are excluded
-    /// for the obvious reason, and the subject is used rather than the full quote
-    /// because a notification shows one line.
+    /// This is what the day's reminders are dealt from. Only lines on the
+    /// **Reminders**, **Office to-do** and **Personal to-do** cards qualify —
+    /// sorted by `BriefGrouping`, exactly as Today sorts them. **Important info**
+    /// ("My blood group is B+") is worth keeping, not worth a nudge: there is
+    /// nothing to do about it, so a notification about it is just noise. Closed
+    /// lines are excluded for the obvious reason, and the subject is used rather
+    /// than the full quote because a notification shows one line.
     func openSubjects(in context: ModelContext, on now: Date = Date()) -> [String] {
         let day = calendar.startOfDay(for: now)
         guard let cutoff = calendar.date(byAdding: .day, value: -BriefBuilder.taskLookBackDays, to: day) else {
@@ -173,7 +178,21 @@ final class BriefService {
                 noteTitle: note?.title,
                 titleIsPlaceholder: note?.titleIsPlaceholder ?? true
             ).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !subject.isEmpty, seen.insert(entry.dedupeKey).inserted else { return nil }
+            guard !subject.isEmpty else { return nil }
+            // The office/personal split doesn't matter here — both are to-dos —
+            // so the document's region is not needed.
+            let group = BriefGrouping.group(
+                kind: entry.kind,
+                day: entry.day,
+                isClosed: entry.isClosed,
+                closedAt: entry.closedAt,
+                text: subject,
+                underlyingText: entry.isRewordedByUser ? nil : entry.text,
+                today: now,
+                calendar: calendar
+            )
+            guard let group, group.isSomethingToDo else { return nil }
+            guard seen.insert(entry.dedupeKey).inserted else { return nil }
             return subject
         }
     }
