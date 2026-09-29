@@ -33,7 +33,7 @@ final class PersistenceController {
     let setupWarning: String?
 
     private init() {
-        let schema = Schema([MemoryItem.self, MemoryAttachment.self, MemoryTag.self])
+        let schema = Schema([MemoryItem.self, MemoryAttachment.self, MemoryTag.self, BriefEntry.self])
         var warning: String? = nil
 
         if let cloud = Self.makeContainer(

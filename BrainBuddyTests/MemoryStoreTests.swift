@@ -10,7 +10,7 @@ final class MemoryStoreTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        let schema = Schema([MemoryItem.self, MemoryAttachment.self, MemoryTag.self])
+        let schema = Schema([MemoryItem.self, MemoryAttachment.self, MemoryTag.self, BriefEntry.self])
         container = try ModelContainer(
             for: schema,
             configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
@@ -58,9 +58,34 @@ final class MemoryStoreTests: XCTestCase {
 
     func testSearchableTextGathersEveryIndexedField() {
         let item = MemoryItem(text: "typed body", extractedText: "ocr body", kind: .image, source: "receipt.jpg")
+        item.summary = "the summarized point"
         XCTAssertTrue(item.searchableText.contains("typed body"))
         XCTAssertTrue(item.searchableText.contains("ocr body"))
         XCTAssertTrue(item.searchableText.contains("receipt.jpg"))
+        // A saved summary is the shortest description of a long recording, which
+        // makes it the most valuable thing in the index.
+        XCTAssertTrue(item.searchableText.contains("the summarized point"))
+    }
+
+    func testBriefEntryPersistsAndClosesCleanly() throws {
+        let entry = BriefEntry(
+            day: Calendar.current.startOfDay(for: Date()),
+            kind: .task,
+            text: "Close the PCH approval",
+            detail: "Site meeting"
+        )
+        context.insert(entry)
+        try context.save()
+
+        let fetched = try XCTUnwrap(try context.fetch(FetchDescriptor<BriefEntry>()).first)
+        XCTAssertFalse(fetched.isClosed)
+        XCTAssertEqual(fetched.kind, .task)
+
+        fetched.isClosed = true
+        fetched.closedAt = Date()
+        try context.save()
+
+        XCTAssertTrue(try XCTUnwrap(try context.fetch(FetchDescriptor<BriefEntry>()).first).isClosed)
     }
 
     func testDisplayTitleFallsBackToThePreview() {

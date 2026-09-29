@@ -77,10 +77,18 @@ enum PDFTextExtractor {
         return pages.joined(separator: "\n\n")
     }
 
-    /// Renders at 2x so small print survives OCR.
-    private static func render(page: PDFPage, scale: CGFloat = 2.0) -> UIImage? {
+    /// The long side a page is rendered at before OCR.
+    ///
+    /// Twice the page's point size was 1,224 pixels across an A4 page, which
+    /// puts the small print of a lab report — reference ranges, units, the
+    /// italic "Sample Type" lines — at about eight pixels tall: legible to a
+    /// person, marginal for a recognizer. This is roughly 300 dpi on A4.
+    static let renderLongSide: CGFloat = 3_300
+
+    private static func render(page: PDFPage) -> UIImage? {
         let bounds = page.bounds(for: .mediaBox)
         guard bounds.width > 0, bounds.height > 0 else { return nil }
+        let scale = renderLongSide / max(bounds.width, bounds.height)
         let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
         return page.thumbnail(of: size, for: .mediaBox)
     }

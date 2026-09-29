@@ -6,29 +6,69 @@ import NaturalLanguage
 enum TextAnalysis {
     /// A short title for something the user never titled.
     ///
-    /// Prefers a genuine first line (people naturally write one), otherwise
-    /// falls back to the first sentence, trimmed to a readable length.
+    /// A deliberate first line wins, because people who type a note naturally
+    /// write one and it is always a better title than anything derived. Failing
+    /// that — a wall of transcribed speech, which has no first line — the title
+    /// is derived from what the content is *about*. See `Headline`: the first
+    /// seventy characters of a recording are its throat-clearing, and using them
+    /// produced titles like "I would like to know when I we are going to leave
+    /// from home and we…".
     static func suggestedTitle(from text: String, fallback: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return fallback }
 
-        let firstLine = trimmed
+        let lines = trimmed
             .components(separatedBy: .newlines)
-            .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })?
-            .trimmingCharacters(in: .whitespaces) ?? trimmed
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
 
-        let candidate = firstLine.count <= 70
-            ? firstLine
-            : (Tokenizer.sentences(in: firstLine).first ?? firstLine)
+        // A short opening line, with a little text under it, is a title someone
+        // wrote. Three lines is the cut: past that this is a document, not a
+        // note with a heading.
+        if lines.count <= 3,
+           let firstLine = lines.first,
+           firstLine.count <= 70,
+           lines.count > 1 || trimmed.count <= 70 {
+            return firstLine
+        }
 
-        if candidate.count <= 70 { return candidate }
+        // A document's first line is usually furniture — a bank name, a
+        // "Transaction Number:" label, a row of digits. Take the first line
+        // that reads like a statement instead, which is what a person scanning
+        // the list is looking for.
+        if lines.count > 3, let line = lines.first(where: isTitleWorthy) {
+            return line
+        }
 
-        // Cut on a word boundary rather than mid-word.
-        let cut = candidate.prefix(70)
+        let headline = Headline.from(trimmed, fallback: "")
+        if !headline.isEmpty { return headline }
+
+        // Nothing derivable: cut the opening on a word boundary rather than
+        // mid-word, which is what this always used to do.
+        guard trimmed.count > 70 else { return trimmed }
+        let cut = trimmed.prefix(70)
         if let lastSpace = cut.lastIndex(of: " ") {
             return String(cut[cut.startIndex..<lastSpace]) + "…"
         }
         return String(cut) + "…"
+    }
+
+    /// Whether a line from a document can stand as its name.
+    ///
+    /// Rejects the three shapes that made "Transaction Number:" and "From:
+    /// 0435XX" into titles: a label ending in a colon, a line with barely any
+    /// words in it, and a line that is mostly digits.
+    static func isTitleWorthy(_ line: String) -> Bool {
+        guard line.count <= 70 else { return false }
+        guard !line.hasSuffix(":") else { return false }
+
+        let words = line.split(separator: " ")
+        guard words.count >= 3 else { return false }
+
+        let letters = line.filter(\.isLetter).count
+        let digits = line.filter(\.isNumber).count
+        guard letters >= 8, letters > digits else { return false }
+        return true
     }
 
     /// Keywords used for the `keywordIndex` field: nouns and proper nouns win,

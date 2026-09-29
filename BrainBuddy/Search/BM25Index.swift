@@ -33,7 +33,10 @@ struct BM25Index {
 
     /// Inverse document frequency, using the BM25+ non-negative variant so a
     /// term present in most documents can never push a score below zero.
-    private func inverseDocumentFrequency(for term: String) -> Double {
+    ///
+    /// Also read by the snippet picker: which line of a document answers a
+    /// question depends on which of the query's words are rare.
+    func inverseDocumentFrequency(for term: String) -> Double {
         let documentFrequency = Double(postings[term]?.count ?? 0)
         guard documentFrequency > 0 else { return 0 }
         let total = Double(documentCount)
