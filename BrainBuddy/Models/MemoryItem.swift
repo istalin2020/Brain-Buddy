@@ -213,6 +213,7 @@ extension MemoryItem {
     /// decided, else what it was about.
     private var summaryLead: String {
         guard hasSummary, let parsed = DiscussionSummarizer.parse(summary) else { return "" }
+        if let decision = parsed.decisions.first { return decision }
         if let point = parsed.keyPoints.first { return point }
         if let followUp = parsed.followUps.first { return followUp }
         guard !parsed.topics.isEmpty else { return "" }

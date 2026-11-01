@@ -10,6 +10,19 @@ import UIKit
 /// yourself and a forty-minute conversation between two other people go through
 /// the same path. That means surviving the screen locking, the app being
 /// backgrounded, and a phone call arriving in the middle.
+///
+/// **A recording is a series of pieces.** Every pause closes the current file
+/// properly and every resume starts a new one; `stop()` hands back all of them,
+/// in order, and they are joined when the note is saved. Resuming used to mean
+/// asking the same recorder to carry on after iOS had taken the microphone
+/// away, and when that failed — "Session activation failed" — the recording
+/// was stuck. A fresh piece needs nothing from the old one, and a piece that is
+/// closed can't be damaged by whatever happens next.
+///
+/// **And it comes back by itself.** After a call or another app takes the
+/// microphone, it keeps trying to get it back (`reclaim`) — when the
+/// interruption ends, when you return to the app, and every few seconds in
+/// between — so a forty-minute meeting doesn't depend on you noticing a pause.
 @MainActor
 @Observable
 final class AudioRecorder {
@@ -55,9 +68,17 @@ final class AudioRecorder {
     /// being suspended from every other reason a recording can come up short.
     private(set) var secondsLostWhileAway: TimeInterval = 0
 
+    /// The piece being recorded now; `nil` while paused.
     private var recorder: AVAudioRecorder?
     private var meterTask: Task<Void, Never>?
     private var fileURL: URL?
+    /// Finished pieces, in order, and how much audio they hold.
+    private var pieces: [URL] = []
+    private var piecesDuration: TimeInterval = 0
+    /// Whether the pause is one to come back from by itself: the microphone was
+    /// taken, as opposed to you leaving the app with background recording off.
+    private var resumesByItself = false
+    private var reclaimTask: Task<Void, Never>?
     private var observers: [any NSObjectProtocol] = []
     private var leftScreenAt: Date?
     private var recordedTimeOnLeaving: TimeInterval = 0
@@ -96,11 +117,23 @@ final class AudioRecorder {
     /// matches what the dictation path in `SpeechTranscriber` already does, and
     /// it costs headset quality on older systems rather than costing a
     /// recording — which is the trade worth making here.
+    ///
+    /// `mixWithOthers` is what keeps a long recording going when another app
+    /// plays a sound — a video, a voice message, a notification. Without it
+    /// every one of those interrupts the recording, and a session that isn't
+    /// mixable may not take the microphone back while the app is in the
+    /// background. A phone call still interrupts; nothing can prevent that.
     private static var categoryOptions: AVAudioSession.CategoryOptions {
         if #available(iOS 26.0, *) {
-            return [.defaultToSpeaker, .allowBluetoothHFP]
+            return [.defaultToSpeaker, .mixWithOthers, .allowBluetoothHFP]
         }
-        return [.defaultToSpeaker]
+        return [.defaultToSpeaker, .mixWithOthers]
+    }
+
+    private func activateSession() throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .default, options: Self.categoryOptions)
+        try session.setActive(true, options: [])
     }
 
     // MARK: - Permission
@@ -126,35 +159,16 @@ final class AudioRecorder {
         guard !isRecording else { return }
         guard await Self.requestPermission() else { throw RecorderError.permissionDenied }
 
-        let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .default, options: Self.categoryOptions)
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
+            try activateSession()
         } catch {
             throw RecorderError.sessionUnavailable(error.localizedDescription)
         }
 
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("voice-\(UUID().uuidString).m4a")
-
-        // Mono AAC at 44.1 kHz: speech-quality, small enough that a long note
-        // still syncs to iCloud quickly. An hour lands around 28 MB.
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 44_100.0,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderBitRateKey: 64_000,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
-
+        pieces = []
+        piecesDuration = 0
         do {
-            let recorder = try AVAudioRecorder(url: url, settings: settings)
-            recorder.isMeteringEnabled = true
-            guard recorder.record() else {
-                throw RecorderError.sessionUnavailable("the recorder refused to start")
-            }
-            self.recorder = recorder
-            self.fileURL = url
+            try startPiece()
         } catch let error as RecorderError {
             throw error
         } catch {
@@ -163,6 +177,7 @@ final class AudioRecorder {
 
         isRecording = true
         pauseReason = nil
+        resumesByItself = false
         duration = 0
         levels = []
         secondsLostWhileAway = 0
@@ -171,39 +186,84 @@ final class AudioRecorder {
         startMetering()
     }
 
-    /// Stops recording and returns the finished file plus its length.
-    @discardableResult
-    func stop() -> (url: URL, duration: TimeInterval)? {
-        guard let recorder, let fileURL else { return nil }
-        // A paused recorder reports `currentTime` as 0, so trust the length we
-        // banked at pause time instead.
-        let length = isPaused ? duration : recorder.currentTime
+    /// Opens a new piece and starts recording into it.
+    private func startPiece() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-\(UUID().uuidString).m4a")
+        let recorder = try AVAudioRecorder(url: url, settings: AudioJoiner.fileSettings)
+        recorder.isMeteringEnabled = true
+        guard recorder.record() else {
+            try? FileManager.default.removeItem(at: url)
+            throw RecorderError.sessionUnavailable("the recorder refused to start")
+        }
+        self.recorder = recorder
+        self.fileURL = url
+    }
+
+    /// Closes the piece being recorded, keeping it if it holds any audio.
+    private func finishPiece() {
+        guard let recorder, let fileURL else { return }
+        let reported = recorder.currentTime
         recorder.stop()
+        self.recorder = nil
+        self.fileURL = nil
+
+        // Measured from the closed file: after an interruption the recorder's
+        // own clock can read zero.
+        let measured = (try? AVAudioFile(forReading: fileURL)).map {
+            Double($0.length) / $0.fileFormat.sampleRate
+        } ?? 0
+        let length = max(reported, measured)
+        if length > 0.05 {
+            pieces.append(fileURL)
+            piecesDuration += length
+        } else {
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    }
+
+    /// Everything recorded so far, across pieces.
+    private var recordedDuration: TimeInterval {
+        piecesDuration + (recorder?.currentTime ?? 0)
+    }
+
+    /// Stops recording and returns the pieces, in order, plus their total
+    /// length. Usually one piece; more if the recording was interrupted.
+    @discardableResult
+    func stop() -> (urls: [URL], duration: TimeInterval)? {
+        guard isRecording else { return nil }
+        finishPiece()
+        stopReclaiming()
         stopMetering()
         stopObserving()
 
-        self.recorder = nil
-        self.fileURL = nil
+        let result: (urls: [URL], duration: TimeInterval) = (pieces, piecesDuration)
+        pieces = []
+        piecesDuration = 0
         isRecording = false
         pauseReason = nil
-        duration = length
+        resumesByItself = false
+        duration = result.duration
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        return (fileURL, length)
+        guard !result.urls.isEmpty else { return nil }
+        return result
     }
 
     /// Aborts and deletes the partial recording.
     func cancel() {
-        guard let recorder, let fileURL else { return }
-        recorder.stop()
+        guard isRecording else { return }
+        finishPiece()
+        stopReclaiming()
         stopMetering()
         stopObserving()
-        try? FileManager.default.removeItem(at: fileURL)
+        for url in pieces { try? FileManager.default.removeItem(at: url) }
 
-        self.recorder = nil
-        self.fileURL = nil
+        pieces = []
+        piecesDuration = 0
         isRecording = false
         pauseReason = nil
+        resumesByItself = false
         duration = 0
         levels = []
         secondsLostWhileAway = 0
@@ -214,31 +274,67 @@ final class AudioRecorder {
 
     // MARK: - Pause / resume
 
-    /// Suspends capture without closing the file. `reason` is shown to the user.
-    func pause(reason: String) {
-        guard let recorder, isRecording, !isPaused else { return }
-        duration = recorder.currentTime
-        recorder.pause()
+    /// Suspends capture, closing the current piece. `reason` is shown to the user.
+    func pause(reason: String, resumesByItself: Bool = false) {
+        guard isRecording, !isPaused else { return }
+        finishPiece()
+        duration = piecesDuration
         pauseReason = reason
+        self.resumesByItself = resumesByItself
+        if resumesByItself { startReclaiming() }
     }
 
-    /// Resumes a paused recording, reactivating the session if an interruption
-    /// took it away. Returns `false` when the microphone couldn't be reclaimed.
+    /// Carries on recording in a new piece. Returns `false` when the
+    /// microphone is still busy — and then, if the pause came from losing the
+    /// microphone, it keeps trying by itself.
     @discardableResult
     func resume() -> Bool {
-        guard let recorder, isRecording, isPaused else { return false }
+        guard isRecording, isPaused else { return false }
         do {
-            try AVAudioSession.sharedInstance().setActive(true, options: [])
+            try activateSession()
+            try startPiece()
         } catch {
-            pauseReason = "Couldn't get the microphone back: \(error.localizedDescription)"
-            return false
-        }
-        guard recorder.record() else {
-            pauseReason = "Couldn't restart the recording. Stop to keep what you have."
+            pauseReason = Self.busyMessage
+            if !resumesByItself {
+                // You asked for it, so a failure now is worth retrying for you.
+                resumesByItself = true
+                startReclaiming()
+            }
             return false
         }
         pauseReason = nil
+        resumesByItself = false
+        stopReclaiming()
         return true
+    }
+
+    static let interruptedMessage =
+        "Paused — a call or another app took the microphone. Recording carries on by itself as soon as it's free."
+    static let busyMessage =
+        "Waiting for the microphone — a call or another app is still using it. Recording carries on by itself as soon as it's free, or tap Resume."
+
+    /// Tries to get the microphone back every two seconds for the first half
+    /// minute, then every five — for as long as you leave the recording
+    /// running. A call can last an hour; the meeting after it still counts.
+    private func startReclaiming() {
+        guard reclaimTask == nil else { return }
+        reclaimTask = Task { [weak self] in
+            var attempt = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: (attempt < 15 ? 2 : 5) * 1_000_000_000)
+                attempt += 1
+                guard let self, self.isRecording, self.isPaused, self.resumesByItself else { return }
+                // Background recording turned off means no recording off
+                // screen, even to resume.
+                if !self.allowsBackgroundRecording, UIApplication.shared.applicationState != .active { continue }
+                if self.resume() { return }
+            }
+        }
+    }
+
+    private func stopReclaiming() {
+        reclaimTask?.cancel()
+        reclaimTask = nil
     }
 
     // MARK: - Interruptions and lifecycle
@@ -296,7 +392,12 @@ final class AudioRecorder {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.noteReturningToScreen() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.noteReturningToScreen()
+                // Back on screen is the most likely moment the microphone is free.
+                if self.isPaused, self.resumesByItself { self.resume() }
+            }
         })
 
         // A headset being unplugged mid-recording stops the engine on some routes;
@@ -310,7 +411,23 @@ final class AudioRecorder {
                 .flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
             guard reason == .oldDeviceUnavailable else { return }
             MainActor.assumeIsolated {
-                guard let self, self.isRecording, self.isPaused else { return }
+                guard let self, self.isRecording, self.isPaused, self.resumesByItself else { return }
+                self.resume()
+            }
+        })
+
+        // The audio system restarting invalidates every recorder in the app.
+        // What was recorded is in the pieces already closed; start a new one.
+        observers.append(center.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isRecording else { return }
+                if !self.isPaused {
+                    self.pause(reason: Self.interruptedMessage, resumesByItself: true)
+                }
                 self.resume()
             }
         })
@@ -326,14 +443,16 @@ final class AudioRecorder {
     private func handleInterruption(type: AVAudioSession.InterruptionType?, shouldResume: Bool) {
         switch type {
         case .began:
-            pause(reason: "Paused — something else is using the microphone.")
+            pause(reason: Self.interruptedMessage, resumesByItself: true)
         case .ended:
-            guard isPaused, allowsBackgroundRecording else { return }
+            guard isPaused, resumesByItself else { return }
             // `shouldResume` is a hint, and not every interruption sets it —
             // locking the screen and some route changes end without it. This
             // recording was in progress before something took the microphone, so
-            // try to reclaim it either way and let `resume()` report a failure.
+            // try to reclaim it either way; if it is still busy, the retries
+            // carry on.
             _ = shouldResume
+            if !allowsBackgroundRecording, UIApplication.shared.applicationState != .active { return }
             resume()
         default:
             break
@@ -343,9 +462,9 @@ final class AudioRecorder {
     // MARK: - Measuring time off screen
 
     private func noteLeavingScreen() {
-        guard let recorder, isRecording, !isPaused else { return }
+        guard isRecording, !isPaused else { return }
         leftScreenAt = Date()
-        recordedTimeOnLeaving = recorder.currentTime
+        recordedTimeOnLeaving = recordedDuration
     }
 
     /// Compares wall-clock time away against audio actually captured.
@@ -356,10 +475,10 @@ final class AudioRecorder {
     private func noteReturningToScreen() {
         guard let away = leftScreenAt else { return }
         leftScreenAt = nil
-        guard let recorder, isRecording, !isPaused else { return }
+        guard isRecording, !isPaused else { return }
 
         let elapsed = Date().timeIntervalSince(away)
-        let captured = recorder.currentTime - recordedTimeOnLeaving
+        let captured = recordedDuration - recordedTimeOnLeaving
         let missed = elapsed - captured
         // A second of slack absorbs the ordinary lag around backgrounding; more
         // than that means audio genuinely went missing.
@@ -373,10 +492,11 @@ final class AudioRecorder {
         meterTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 60_000_000)
-                guard let self, let recorder = self.recorder else { return }
-                guard !self.isPaused else { continue }
+                guard let self else { return }
+                // Paused between pieces there is no recorder, and nothing to meter.
+                guard !self.isPaused, let recorder = self.recorder else { continue }
                 recorder.updateMeters()
-                self.duration = recorder.currentTime
+                self.duration = self.recordedDuration
                 self.append(level: Self.normalize(decibels: recorder.averagePower(forChannel: 0)))
             }
         }

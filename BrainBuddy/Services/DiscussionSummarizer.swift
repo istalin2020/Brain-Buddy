@@ -13,14 +13,20 @@ import NaturalLanguage
 /// unit-testable without a device.
 enum DiscussionSummarizer {
     struct Summary: Equatable {
+        /// Who took part, when the transcript says who spoke — in the order
+        /// they first spoke. Empty for an ordinary transcript.
+        var speakers: [String] = []
         /// The recurring subjects, in the speakers' own spelling.
         var topics: [String]
         /// The sentences that carry the most of the transcript's own vocabulary.
         var keyPoints: [String]
+        /// What was agreed. Only for a conversation with named speakers, where
+        /// "we agreed" is the line people look for afterwards.
+        var decisions: [String] = []
         /// Sentences where somebody committed to something.
         var followUps: [String]
 
-        var isEmpty: Bool { keyPoints.isEmpty && followUps.isEmpty }
+        var isEmpty: Bool { keyPoints.isEmpty && followUps.isEmpty && decisions.isEmpty }
 
         /// The form that gets stored on the memory and read on screen.
         ///
@@ -28,6 +34,9 @@ enum DiscussionSummarizer {
         /// the shared heading constants rather than repeating the literals.
         var text: String {
             var lines: [String] = []
+            if !speakers.isEmpty {
+                lines.append(DiscussionSummarizer.speakersPrefix + speakers.joined(separator: ", "))
+            }
             if !topics.isEmpty {
                 lines.append(DiscussionSummarizer.topicsPrefix + topics.joined(separator: ", "))
             }
@@ -35,6 +44,11 @@ enum DiscussionSummarizer {
                 if !lines.isEmpty { lines.append("") }
                 lines.append(DiscussionSummarizer.keyPointsHeading)
                 lines.append(contentsOf: keyPoints.map { "\(DiscussionSummarizer.bullet) \($0)" })
+            }
+            if !decisions.isEmpty {
+                if !lines.isEmpty { lines.append("") }
+                lines.append(DiscussionSummarizer.decisionsHeading)
+                lines.append(contentsOf: decisions.map { "\(DiscussionSummarizer.bullet) \($0)" })
             }
             if !followUps.isEmpty {
                 if !lines.isEmpty { lines.append("") }
@@ -45,8 +59,10 @@ enum DiscussionSummarizer {
         }
     }
 
+    static let speakersPrefix = "Speakers: "
     static let topicsPrefix = "Topics: "
     static let keyPointsHeading = "Key points"
+    static let decisionsHeading = "Decisions"
     static let followUpsHeading = "Follow-ups"
     static let bullet = "•"
 
@@ -63,6 +79,11 @@ enum DiscussionSummarizer {
         maxKeyPoints: Int = 5,
         maxFollowUps: Int = 4
     ) -> Summary? {
+        // A recorded conversation that says who spoke is summarised by speaker.
+        if let turns = SpeakerTranscript.turns(in: raw, strict: true) {
+            return summarize(turns: turns, maxKeyPoints: maxKeyPoints, maxFollowUps: maxFollowUps)
+        }
+
         let transcript = prepared(raw)
         let sentences = usableSentences(in: transcript)
         guard sentences.count >= 2 else { return nil }
@@ -109,6 +130,86 @@ enum DiscussionSummarizer {
         )
         return summary.isEmpty ? nil : summary
     }
+
+    /// A conversation with named speakers: the same choice of lines, each
+    /// saying whose it is, plus what was agreed.
+    ///
+    /// - Follow-ups are claimed first — they are what reaches Today.
+    /// - Then decisions: "we agreed", "it's confirmed", "approved".
+    /// - Then key points, and anyone who did a real share of the talking
+    ///   (`speakerShareForAVoice`) is heard at least once. A summary that
+    ///   quotes only the person who talked most misreports the meeting.
+    static func summarize(
+        turns: [SpeakerTranscript.Turn],
+        maxKeyPoints: Int = 5,
+        maxFollowUps: Int = 4,
+        maxDecisions: Int = 3
+    ) -> Summary? {
+        var sentences: [String] = []
+        var owners: [String] = []
+        var speakers: [String] = []
+        var spoken: [String: Int] = [:]
+        for turn in turns {
+            if !speakers.contains(turn.speaker) { speakers.append(turn.speaker) }
+            spoken[turn.speaker, default: 0] += wordCount(of: turn.text)
+            for sentence in usableSentences(in: prepared(turn.text)) {
+                sentences.append(sentence)
+                owners.append(turn.speaker)
+            }
+        }
+        let allWords = spoken.values.reduce(0, +)
+        guard sentences.count >= 2, allWords >= minimumWords else { return nil }
+
+        var frequency: [String: Int] = [:]
+        for sentence in sentences {
+            for term in Set(Tokenizer.tokens(in: sentence)) {
+                frequency[term, default: 0] += 1
+            }
+        }
+        guard let peak = frequency.values.max(), peak > 0 else { return nil }
+        let scale = Double(peak)
+        let scores = sentences.indices.map { index in
+            score(sentences[index], at: index, frequency: frequency, scale: scale)
+        }
+
+        let followUpIndexes = pick(
+            from: sentences.indices.filter { isCommitment(sentences[$0]) },
+            scores: scores, limit: maxFollowUps, sentences: sentences
+        )
+        let afterFollowUps = sentences.indices.filter { !followUpIndexes.contains($0) }
+        let decisionIndexes = pick(
+            from: afterFollowUps.filter { isDecision(sentences[$0]) },
+            scores: scores, limit: maxDecisions, sentences: sentences
+        )
+        let remaining = afterFollowUps.filter { !decisionIndexes.contains($0) }
+        let pointBudget = min(maxKeyPoints, max(2, remaining.count / 3))
+        var keyPointIndexes = pick(from: remaining, scores: scores, limit: pointBudget, sentences: sentences)
+
+        let quoted = Set(followUpIndexes + decisionIndexes + keyPointIndexes)
+        for speaker in speakers {
+            let share = Double(spoken[speaker] ?? 0) / Double(max(allWords, 1))
+            guard share >= speakerShareForAVoice,
+                  !quoted.contains(where: { owners[$0] == speaker }) else { continue }
+            let theirs = remaining.filter { owners[$0] == speaker && !keyPointIndexes.contains($0) }
+            if let best = theirs.max(by: { scores[$0] == scores[$1] ? $0 > $1 : scores[$0] < scores[$1] }) {
+                keyPointIndexes.append(best)
+            }
+        }
+        keyPointIndexes.sort()
+
+        let attributed = { (index: Int) in "\(owners[index]): \(clipped(sentences[index]))" }
+        let summary = Summary(
+            speakers: speakers,
+            topics: topics(in: turns.map(\.text).joined(separator: "\n")),
+            keyPoints: keyPointIndexes.map(attributed),
+            decisions: decisionIndexes.map(attributed),
+            followUps: followUpIndexes.map(attributed)
+        )
+        return summary.isEmpty ? nil : summary
+    }
+
+    /// Talking for at least this share of a meeting earns a line in its summary.
+    static let speakerShareForAVoice = 0.15
 
     /// Straightens out text that was written as a document rather than spoken.
     ///
@@ -184,16 +285,25 @@ enum DiscussionSummarizer {
     static func parse(_ stored: String) -> Summary? {
         guard !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 
-        enum Section { case keyPoints, followUps }
+        enum Section { case keyPoints, decisions, followUps }
         var section: Section = .keyPoints
+        var speakers: [String] = []
         var topics: [String] = []
         var keyPoints: [String] = []
+        var decisions: [String] = []
         var followUps: [String] = []
 
         for rawLine in stored.components(separatedBy: .newlines) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             if line.isEmpty { continue }
 
+            if line.hasPrefix(speakersPrefix) {
+                speakers = line.dropFirst(speakersPrefix.count)
+                    .components(separatedBy: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                continue
+            }
             if line.hasPrefix(topicsPrefix) {
                 topics = line.dropFirst(topicsPrefix.count)
                     .components(separatedBy: ",")
@@ -202,6 +312,7 @@ enum DiscussionSummarizer {
                 continue
             }
             if line == keyPointsHeading { section = .keyPoints; continue }
+            if line == decisionsHeading { section = .decisions; continue }
             if line == followUpsHeading { section = .followUps; continue }
 
             guard line.hasPrefix(bullet) else { continue }
@@ -209,11 +320,18 @@ enum DiscussionSummarizer {
             guard !body.isEmpty else { continue }
             switch section {
             case .keyPoints: keyPoints.append(body)
+            case .decisions: decisions.append(body)
             case .followUps: followUps.append(body)
             }
         }
 
-        let summary = Summary(topics: topics, keyPoints: keyPoints, followUps: followUps)
+        let summary = Summary(
+            speakers: speakers,
+            topics: topics,
+            keyPoints: keyPoints,
+            decisions: decisions,
+            followUps: followUps
+        )
         return summary.isEmpty && topics.isEmpty ? nil : summary
     }
 
@@ -312,6 +430,17 @@ enum DiscussionSummarizer {
     static func isCommitment(_ sentence: String) -> Bool {
         let padded = " " + expandedForMatching(sentence) + " "
         return commitmentCues.contains { padded.contains($0) }
+    }
+
+    /// Phrases that mark something as settled in a discussion.
+    private static let decisionCues: [String] = [
+        " agreed", " agree that ", " approved", " confirmed", " decided", " decision",
+        " finalised", " finalized", " go ahead", " settled on", " we will go with "
+    ]
+
+    static func isDecision(_ sentence: String) -> Bool {
+        let padded = " " + expandedForMatching(sentence) + " "
+        return decisionCues.contains { padded.contains($0) }
     }
 
     /// Whether a sentence describes something that still has to happen.

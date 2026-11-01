@@ -73,51 +73,117 @@ final class IngestService {
     /// The note is inserted before transcription finishes on purpose: losing a
     /// recording because speech recognition failed would be the worst possible
     /// outcome for a capture tool.
+    ///
+    /// `audioURLs` is usually one file. A recording that was interrupted and
+    /// carried on arrives as several pieces; they are joined into one file to
+    /// play back, and if joining fails each piece is kept as its own attachment
+    /// rather than any of them being lost.
     @discardableResult
-    func saveVoiceNote(audioURL: URL, duration: TimeInterval, in context: ModelContext) async -> MemoryItem? {
-        guard let data = try? Data(contentsOf: audioURL) else {
+    func saveVoiceNote(audioURLs: [URL], duration: TimeInterval, in context: ModelContext) async -> MemoryItem? {
+        activity = "Saving recording"
+        var files = audioURLs
+        if audioURLs.count > 1, let joined = try? await AudioJoiner.join(audioURLs) {
+            files = [joined]
+        }
+
+        let item = MemoryItem(kind: .voice, source: "Voice note")
+        var attachments: [MemoryAttachment] = []
+        for url in files {
+            guard let data = try? Data(contentsOf: url) else { continue }
+            let attachment = MemoryAttachment(
+                filename: url.lastPathComponent,
+                kind: .audio,
+                payload: data,
+                duration: files.count == 1 ? duration : AudioJoiner.duration(of: url)
+            )
+            attachment.memory = item
+            attachments.append(attachment)
+        }
+        guard !attachments.isEmpty else {
+            activity = nil
             lastError = "The recording couldn't be read."
             return nil
         }
-
-        activity = "Saving recording"
-        let item = MemoryItem(kind: .voice, source: "Voice note")
-        let attachment = MemoryAttachment(
-            filename: audioURL.lastPathComponent,
-            kind: .audio,
-            payload: data,
-            duration: duration
-        )
-        attachment.memory = item
         context.insert(item)
-        context.insert(attachment)
+        for attachment in attachments { context.insert(attachment) }
         item.title = "Voice note · \(Date().formatted(date: .abbreviated, time: .shortened))"
         try? context.save()
 
+        await transcribe(item, from: files, into: attachments[0])
+
+        await finalize(item, in: context, activity: "Indexing", fallbackTitle: "Voice note")
+        for url in Set(audioURLs + files) { try? FileManager.default.removeItem(at: url) }
+        return item
+    }
+
+    /// Transcribes a voice note's audio again — for a note whose transcription
+    /// failed, or one recorded before speakers were told apart.
+    ///
+    /// Returns whether a transcript came back. The caller re-indexes (through
+    /// `AppServices.applyEdit`), which also rewrites an automatic summary.
+    @discardableResult
+    func transcribeAgain(_ item: MemoryItem) async -> Bool {
+        let audio = item.sortedAttachments.filter { $0.kind == .audio }
+        var files: [URL] = []
+        for attachment in audio {
+            guard let payload = attachment.payload else { continue }
+            let name = attachment.filename.isEmpty ? "voice.m4a" : attachment.filename
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("again-\(UUID().uuidString)-\(name)")
+            guard (try? payload.write(to: url)) != nil else { continue }
+            files.append(url)
+        }
+        defer { files.forEach { try? FileManager.default.removeItem(at: $0) } }
+        guard let first = audio.first, !files.isEmpty else {
+            lastError = "The audio for this note isn't on this device yet — it may still be syncing from iCloud."
+            return false
+        }
+
+        let before = item.text
+        await transcribe(item, from: files, into: first)
+        activity = nil
+        return item.text != before || !item.text.isEmpty
+    }
+
+    /// Puts a transcript on a voice note, keeping the audio whatever happens.
+    private func transcribe(_ item: MemoryItem, from files: [URL], into attachment: MemoryAttachment) async {
         activity = "Transcribing"
+        // A long recording takes a minute or two to read; ask iOS for time to
+        // finish if the screen locks part way through.
+        let background = UIApplication.shared.beginBackgroundTask(withName: "Transcribe voice note")
+        defer {
+            if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
+        }
+
         do {
-            let transcript = try await SpeechTranscriber.transcribe(
-                fileAt: audioURL,
-                duration: duration
-            ) { [weak self] done, total in
+            let transcript = try await SpeechTranscriber.transcribe(files: files) { [weak self] done, total in
                 // A forty-minute recording takes a while; "Transcribing" alone
                 // for several minutes looks identical to being stuck.
                 guard total > 1 else { return }
                 self?.activity = "Transcribing part \(min(done + 1, total)) of \(total)"
             }
-            let clean = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !clean.isEmpty {
-                item.text = clean
-                attachment.extractedText = clean
-                item.title = ""
-            }
+            let clean = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !clean.isEmpty else { return }
+            item.text = clean
+            attachment.extractedText = clean
+            if item.titleIsPlaceholder || item.title.hasPrefix("Voice note") { item.title = "" }
+            if item.summaryIsAutomatic { item.summary = "" }
         } catch {
             lastError = "Saved the recording, but couldn't transcribe it: \(error.localizedDescription)"
         }
+    }
 
-        await finalize(item, in: context, activity: "Indexing", fallbackTitle: "Voice note")
-        try? FileManager.default.removeItem(at: audioURL)
-        return item
+    /// Renames a speaker in a voice note's transcript and summary. Giving two
+    /// speakers the same name makes them one person.
+    func renameSpeaker(_ old: String, to new: String, on item: MemoryItem) {
+        let name = new.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != old else { return }
+        item.text = SpeakerTranscript.renaming(item.text, from: old, to: name)
+        for attachment in item.sortedAttachments where attachment.kind == .audio {
+            attachment.extractedText = SpeakerTranscript.renaming(attachment.extractedText, from: old, to: name)
+        }
+        item.summary = SpeakerTranscript.renamingInSummary(item.summary, from: old, to: name)
+        item.touch()
     }
 
     // MARK: - Images
@@ -467,6 +533,9 @@ final class IngestService {
     private func summarizeIfNeeded(_ item: MemoryItem, body: String) async {
         guard item.summary.isEmpty || item.summaryIsAutomatic else { return }
         guard item.kind != .note, item.kind != .link else { return }
+        // A voice note's transcript is stored twice — on the note and on its
+        // audio — and a conversation is read by speaker from the note's copy.
+        let body = item.kind == .voice && !item.text.isEmpty ? item.text : body
         guard DiscussionSummarizer.wordCount(of: body) >= DiscussionSummarizer.minimumWords else {
             return
         }

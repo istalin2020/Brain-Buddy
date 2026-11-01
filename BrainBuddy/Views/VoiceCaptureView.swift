@@ -27,6 +27,7 @@ struct VoiceCaptureView: View {
     @State private var isSummarizing = false
     @State private var notice: String?
     @State private var errorMessage: String?
+    @State private var isRetrying = false
 
     private var recorder: AudioRecorder { services.recorder }
 
@@ -168,6 +169,7 @@ struct VoiceCaptureView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     savedBanner(item)
                     transcriptSection(item)
+                    SpeakerNamesEditor(item: item)
                     summarySection(item)
                 }
                 .padding()
@@ -203,11 +205,28 @@ struct VoiceCaptureView: View {
                 Text("No speech was recognized. The audio is saved and you can still play it back from your library.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                Button {
+                    transcribeAgain(item)
+                } label: {
+                    if isRetrying {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text(services.ingest.activity ?? "Transcribing…")
+                        }
+                    } else {
+                        Label("Transcribe again", systemImage: "arrow.clockwise")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isRetrying)
+                if let notice {
+                    Text(notice)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } else {
-                Text(item.text)
+                TranscriptText(text: item.text)
                     .font(.callout)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -218,7 +237,24 @@ struct VoiceCaptureView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Divider()
 
-                if let summary {
+                if summary == nil, item.hasSummary, let saved = DiscussionSummarizer.parse(item.summary) {
+                    // Written and saved with the recording; nothing to press.
+                    Text("Summary")
+                        .font(.headline)
+                    SummaryBody(summary: saved)
+                    Label("Saved with the recording", systemImage: "checkmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if item.summaryIsAutomatic, !saved.followUps.isEmpty {
+                        Button {
+                            sendFollowUpsToToday(item)
+                        } label: {
+                            Label("Add its follow-ups to Today", systemImage: "sun.max")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                } else if let summary {
                     Text("Summary")
                         .font(.headline)
                     SummaryBody(summary: summary)
@@ -325,7 +361,7 @@ struct VoiceCaptureView: View {
         }
         // Very short taps are almost always accidental.
         guard result.duration >= 0.6 else {
-            try? FileManager.default.removeItem(at: result.url)
+            result.urls.forEach { try? FileManager.default.removeItem(at: $0) }
             errorMessage = "That recording was too short to save."
             return
         }
@@ -333,7 +369,7 @@ struct VoiceCaptureView: View {
         stage = .saving
         Task {
             let item = await services.ingest.saveVoiceNote(
-                audioURL: result.url,
+                audioURLs: result.urls,
                 duration: result.duration,
                 in: modelContext
             )
@@ -364,6 +400,32 @@ struct VoiceCaptureView: View {
         }
     }
 
+    private func transcribeAgain(_ item: MemoryItem) {
+        guard !isRetrying else { return }
+        isRetrying = true
+        services.ingest.clearError()
+        Task {
+            if await services.ingest.transcribeAgain(item) {
+                await services.applyEdit(to: item, in: modelContext)
+            }
+            isRetrying = false
+            if item.text.isEmpty, let problem = services.ingest.lastError {
+                notice = problem
+            }
+        }
+    }
+
+    /// The summary written with the recording is the app's reading of it, so
+    /// its follow-ups stay off Today until you say they belong there.
+    private func sendFollowUpsToToday(_ item: MemoryItem) {
+        item.summaryIsAutomatic = false
+        item.touch()
+        Task {
+            await services.applyEdit(to: item, in: modelContext)
+            dismiss()
+        }
+    }
+
     private func saveSummary(_ summary: DiscussionSummarizer.Summary, on item: MemoryItem) {
         let text = summary.text
         Task {
@@ -383,6 +445,11 @@ struct SummaryBody: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if !summary.speakers.isEmpty {
+                Label(summary.speakers.joined(separator: ", "), systemImage: "person.2")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             if !summary.topics.isEmpty {
                 Text("Topics: " + summary.topics.joined(separator: ", "))
                     .font(.footnote)
@@ -390,6 +457,9 @@ struct SummaryBody: View {
             }
             if !summary.keyPoints.isEmpty {
                 group("Key points", lines: summary.keyPoints)
+            }
+            if !summary.decisions.isEmpty {
+                group("Decisions", lines: summary.decisions)
             }
             if !summary.followUps.isEmpty {
                 group("Follow-ups", lines: summary.followUps)

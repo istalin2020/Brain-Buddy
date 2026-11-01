@@ -24,10 +24,13 @@ struct MemoryDetailView: View {
     @State private var draftSummary: DiscussionSummarizer.Summary?
     @State private var isSummarizing = false
     @State private var summaryNotice: String?
+    @State private var isTranscribing = false
+    @State private var transcriptionNotice: String?
 
     var body: some View {
         List {
             titleSection
+            if item.kind == .voice { voiceSection }
             summarySection
             if !item.sortedAttachments.isEmpty { attachmentSection }
             if !item.extractedText.isEmpty { extractedSection }
@@ -99,10 +102,67 @@ struct MemoryDetailView: View {
                     Text("No typed text. \(item.extractedText.isEmpty ? "Nothing was extracted from the attachment." : "See the extracted text below.")")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                } else if item.kind == .voice {
+                    TranscriptText(text: item.text)
                 } else {
                     Text(item.text)
                         .textSelection(.enabled)
                 }
+            }
+        }
+    }
+
+    /// Speakers and transcription, for a recording.
+    ///
+    /// "Transcribe again" is how a recording whose transcription failed gets
+    /// one after all — and how one recorded before speakers were told apart
+    /// gets its "Person 1", "Person 2".
+    private var voiceSection: some View {
+        Section {
+            SpeakerNamesEditor(item: item)
+            Button {
+                transcribeAgain()
+            } label: {
+                if isTranscribing {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text(services.ingest.activity ?? "Transcribing…")
+                    }
+                } else {
+                    Label("Transcribe again", systemImage: "waveform.badge.magnifyingglass")
+                }
+            }
+            .disabled(isTranscribing)
+            if let transcriptionNotice {
+                Text(transcriptionNotice)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Recording")
+        } footer: {
+            Text("Transcribing again replaces the transcript above and tells the speakers apart. A summary you saved yourself is kept.")
+        }
+    }
+
+    private func transcribeAgain() {
+        guard !isTranscribing else { return }
+        isTranscribing = true
+        transcriptionNotice = nil
+        services.ingest.clearError()
+        Task {
+            if await services.ingest.transcribeAgain(item) {
+                await services.applyEdit(to: item, in: modelContext)
+            }
+            isTranscribing = false
+            if let problem = services.ingest.lastError {
+                transcriptionNotice = problem
+                services.ingest.clearError()
+            } else {
+                let people = SpeakerTranscript.speakers(in: item.text).count
+                transcriptionNotice = people >= 2
+                    ? "Done — \(people) people heard."
+                    : "Done. Only one voice was told apart — if there were more, they sounded too alike to separate reliably."
             }
         }
     }

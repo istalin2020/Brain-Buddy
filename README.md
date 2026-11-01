@@ -16,7 +16,7 @@ Built with SwiftUI + SwiftData (CloudKit mirroring), iOS 17+.
 | --- | --- |
 | **Text** | Typed straight into the capture box. `#hashtags` become tags automatically. |
 | **Dictation** | A mic inside the capture box types what you say into the note as you say it, **at the cursor**, so you can speak a thought and edit it — even while it is still listening. Distinct from a voice note: this is a keyboard, that keeps the recording. It runs continuously — pause for a minute if you like, nothing already dictated is lost — and only you end it. |
-| **Voice** | Recorded to AAC, saved immediately, then transcribed with `SFSpeechRecognizer` (on-device when available). Keeps recording with the screen off, so you can capture a whole discussion. Afterwards you get the transcript, and can turn it into a saved summary. |
+| **Voice** | Recorded to AAC, saved immediately, then transcribed with `SFSpeechRecognizer` (on-device when available). Keeps recording with the screen off, so you can capture a whole discussion, and carries on by itself after a call. A meeting comes back as **Person 1 / Person 2** turns with a summary of who said what, saved with it. |
 | **Image** | Photo library or camera. Text is pulled out with Vision OCR so photos are searchable by their contents. |
 | **Scan** | VisionKit's document scanner — edge detection and perspective correction, then OCR per page. |
 | **PDF** | Text layer extracted with PDFKit. If the PDF is a scan with no text layer, pages are rasterized and OCR'd. |
@@ -349,7 +349,14 @@ is on screen rather than as a cold prompt at first launch.
 Voice capture is built for the long case, not just the ten-second reminder:
 
 - **The screen can go off.** Recording continues when the phone locks or you
-  switch apps. A phone call pauses it and it resumes by itself afterwards.
+  switch apps, and another app playing a sound doesn't stop it (the session
+  mixes with others). A phone call pauses it, and it **resumes by itself**
+  afterwards — it keeps asking for the microphone back every few seconds and
+  whenever you return to the app, because "Session activation failed" just
+  means *not yet*, and a meeting shouldn't depend on you noticing a pause.
+  Every pause closes the current file and every resume starts a new one, so an
+  interruption can never damage what was already recorded; the pieces are joined
+  into one file when the note is saved (and kept separately if joining fails).
   Settings › Voice recording turns this off, and "off" means *pause* — you never
   lose what was already captured, you just stop capturing while you're away.
 
@@ -362,10 +369,28 @@ Voice capture is built for the long case, not just the ten-second reminder:
   Voice recording reports whether the running build actually has it, read back
   from the bundle rather than assumed, and the recorder pauses deliberately
   rather than being frozen mid-word if it's missing.
-- **Long audio is transcribed in full.** `SFSpeechURLRecognitionRequest` is built
-  for utterances and gives up somewhere past a minute, so recordings are sliced
-  into 45-second segments and transcribed one at a time, with progress shown. One
-  unintelligible minute is skipped rather than losing the other thirty-nine.
+- **Long audio is transcribed in full** (`RecordingTranscriber`). The recognizer
+  gives up somewhere past a minute, so the audio is decoded to 16 kHz and fed to
+  it in slices of about 45 seconds — each **ending in the quietest moment**
+  nearby, so no word is cut in half. Quiet audio (a phone on a meeting table) is
+  **brought up** to a level the recognizer accepts, up to 26 dB; a silent slice
+  is skipped; and "No speech detected" on one slice is an empty slice, not a
+  failed recording. That last one is what used to happen: every slice of a quiet
+  recording came back "no speech", and the note had no transcript at all.
+  A recording whose transcription failed has **Transcribe again** on its page.
+- **Who said what.** When a recording has more than one voice, the transcript
+  comes back in turns — *Person 1: … Person 2: …* — and you can put names to
+  them on the transcript screen or the note's page. It is done on the phone from
+  the audio itself: each stretch of speech between pauses is described by the
+  shape of its spectrum (12 MFCCs) and its pitch (`SpeakerFeatures`), and the
+  stretches are grouped by average-linkage clustering with a fixed threshold
+  (`SpeakerClustering`). Tuned against meetings with known speakers, it never
+  split one person into two and never did worse than calling everyone one
+  person; clearly different voices (a man and a woman, a deep voice and a light
+  one) separate well, while two similar voices in a short recording are often
+  left together. It errs that way deliberately — a note to yourself must never
+  come back as a conversation. If it does split someone in two, give both labels
+  the same name and they become one.
 - **You choose the spoken language, and how accurate to be.** Settings ›
   Transcription. Both matter more than they sound:
   - A recognizer set to the wrong language doesn't fail, it *spells what it hears*
@@ -392,12 +417,16 @@ Voice capture is built for the long case, not just the ten-second reminder:
   half-remember is what makes it checkable.
 - **You see the transcript before you leave.** The recording is saved *first* —
   a crash or a failed transcription can never cost you the audio — and then the
-  transcript appears with a **Create summary** button.
-- **Summaries are extractive and opt-in.** Key points and follow-ups (anything
-  somebody committed to: *have to*, *will*, *let's*, *priority*) are pulled out as
-  verbatim sentences. Nothing is generated, so a summary can't invent a decision
-  nobody made. It is a draft until you press **Save**, and saving indexes it — so
-  a two-hour meeting becomes findable by the three things that mattered in it.
+  transcript appears with its summary.
+- **Summaries are extractive, and saved with the recording.** Key points and
+  follow-ups (anything somebody committed to: *have to*, *will*, *let's*,
+  *priority*) are pulled out as verbatim sentences. Nothing is generated, so a
+  summary can't invent a decision nobody made. A meeting with speakers gets
+  **Speakers**, **Decisions** (*agreed*, *confirmed*, *approved*) and every line
+  marked with who said it — *"Person 2: I'll send the revised drawings by
+  Thursday"* — and anyone who did a real share of the talking is quoted at least
+  once. The summary is saved and searchable straight away; its follow-ups reach
+  Today only when you tap **Add its follow-ups to Today**.
 
 Any long memory can be summarized later, too: open it and the Summary section is
 there, including for OCR'd scans and imported PDFs.
