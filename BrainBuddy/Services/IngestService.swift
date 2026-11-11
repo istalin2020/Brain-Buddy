@@ -109,7 +109,7 @@ final class IngestService {
         item.title = "Voice note · \(Date().formatted(date: .abbreviated, time: .shortened))"
         try? context.save()
 
-        await transcribe(item, from: files, into: attachments[0])
+        await transcribe(item, from: files, into: attachments[0], in: context)
 
         await finalize(item, in: context, activity: "Indexing", fallbackTitle: "Voice note")
         for url in Set(audioURLs + files) { try? FileManager.default.removeItem(at: url) }
@@ -122,7 +122,7 @@ final class IngestService {
     /// Returns whether a transcript came back. The caller re-indexes (through
     /// `AppServices.applyEdit`), which also rewrites an automatic summary.
     @discardableResult
-    func transcribeAgain(_ item: MemoryItem) async -> Bool {
+    func transcribeAgain(_ item: MemoryItem, in context: ModelContext) async -> Bool {
         let audio = item.sortedAttachments.filter { $0.kind == .audio }
         var files: [URL] = []
         for attachment in audio {
@@ -140,13 +140,18 @@ final class IngestService {
         }
 
         let before = item.text
-        await transcribe(item, from: files, into: first)
+        await transcribe(item, from: files, into: first, in: context)
         activity = nil
         return item.text != before || !item.text.isEmpty
     }
 
     /// Puts a transcript on a voice note, keeping the audio whatever happens.
-    private func transcribe(_ item: MemoryItem, from files: [URL], into attachment: MemoryAttachment) async {
+    private func transcribe(
+        _ item: MemoryItem,
+        from files: [URL],
+        into attachment: MemoryAttachment,
+        in context: ModelContext
+    ) async {
         activity = "Transcribing"
         // A long recording takes a minute or two to read; ask iOS for time to
         // finish if the screen locks part way through.
@@ -156,7 +161,10 @@ final class IngestService {
         }
 
         do {
-            let transcript = try await SpeechTranscriber.transcribe(files: files) { [weak self] done, total in
+            let transcript = try await SpeechTranscriber.transcribe(
+                files: files,
+                vocabulary: vocabulary(in: context, excluding: item)
+            ) { [weak self] done, total in
                 // A forty-minute recording takes a while; "Transcribing" alone
                 // for several minutes looks identical to being stuck.
                 guard total > 1 else { return }
@@ -171,6 +179,20 @@ final class IngestService {
         } catch {
             lastError = "Saved the recording, but couldn't transcribe it: \(error.localizedDescription)"
         }
+    }
+
+    /// The names and terms in your recent notes, for the recognizer to expect.
+    private func vocabulary(in context: ModelContext, excluding item: MemoryItem) -> [String] {
+        var descriptor = FetchDescriptor<MemoryItem>(
+            predicate: #Predicate { !$0.isTrashed },
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
+        descriptor.fetchLimit = 300
+        let identifier = item.identifier
+        let texts = ((try? context.fetch(descriptor)) ?? [])
+            .filter { $0.identifier != identifier }
+            .flatMap { [$0.title, String($0.text.prefix(2000))] }
+        return SpeechVocabulary.terms(in: texts)
     }
 
     /// Renames a speaker in a voice note's transcript and summary. Giving two

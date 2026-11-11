@@ -151,7 +151,7 @@ struct MemoryDetailView: View {
         transcriptionNotice = nil
         services.ingest.clearError()
         Task {
-            if await services.ingest.transcribeAgain(item) {
+            if await services.ingest.transcribeAgain(item, in: modelContext) {
                 await services.applyEdit(to: item, in: modelContext)
             }
             isTranscribing = false

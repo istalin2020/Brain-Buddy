@@ -126,9 +126,24 @@ final class SpeechTranscriber {
     }
 
     nonisolated private static func makeRecognizer(for locale: Locale) -> SFSpeechRecognizer? {
-        SFSpeechRecognizer(locale: locale)
-            ?? SFSpeechRecognizer(locale: Locale.current)
-            ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+        if let exact = SFSpeechRecognizer(locale: locale) ?? SFSpeechRecognizer(locale: Locale.current) {
+            return exact
+        }
+        // A region the recognizer doesn't cover — English in Oman, say — falls
+        // to the languages set on the phone before plain US English, so
+        // someone who also has English (India) or Hindi set gets that.
+        for identifier in Locale.preferredLanguages {
+            if let recognizer = SFSpeechRecognizer(locale: Locale(identifier: identifier)) {
+                return recognizer
+            }
+        }
+        return SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    }
+
+    /// The language recordings are transcribed in, as a person would name it.
+    nonisolated static var transcriptionLanguageName: String {
+        guard let locale = makeRecognizer(for: preferredLocale)?.locale else { return "unavailable" }
+        return Locale.current.localizedString(forIdentifier: locale.identifier) ?? locale.identifier
     }
 
     /// Applies the accuracy and language preferences to one request.
@@ -483,8 +498,10 @@ final class SpeechTranscriber {
     /// - Parameter progress: called on the main actor with `(completed, total)`
     ///   slices, so the UI can say something better than "Transcribing…" for
     ///   several minutes.
+    /// - Parameter vocabulary: names and terms to expect (`SpeechVocabulary`).
     static func transcribe(
         files: [URL],
+        vocabulary: [String] = [],
         progress: ((Int, Int) -> Void)? = nil
     ) async throws -> RecordingTranscriber.Transcript {
         guard await requestAuthorization() else { throw TranscriberError.notAuthorized }
@@ -492,7 +509,10 @@ final class SpeechTranscriber {
         return try await RecordingTranscriber.transcribe(
             files: files,
             recognizer: recognizer,
-            configure: { configure($0, using: recognizer) },
+            configure: { request in
+                configure(request, using: recognizer)
+                request.contextualStrings = vocabulary
+            },
             progress: { done, total in
                 await MainActor.run { progress?(done, total) }
             }

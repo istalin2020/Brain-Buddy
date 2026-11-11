@@ -371,8 +371,17 @@ Voice capture is built for the long case, not just the ten-second reminder:
   rather than being frozen mid-word if it's missing.
 - **Long audio is transcribed in full** (`RecordingTranscriber`). The recognizer
   gives up somewhere past a minute, so the audio is decoded to 16 kHz and fed to
-  it in slices of about 45 seconds — each **ending in the quietest moment**
-  nearby, so no word is cut in half. Quiet audio (a phone on a meeting table) is
+  it in slices of about 14 seconds — each **ending in the quietest moment**
+  nearby, so no word is cut in half. **Every utterance is kept**: after a pause
+  the recognizer silently starts a new utterance inside the same request, and
+  its final result holds only the last one — taking just that turned a
+  fourteen-minute meeting into 118 words. Partial results are followed instead
+  and each utterance is banked as the next begins (`PassCollector`, the same
+  rule live dictation uses). The recognizer is also handed the **names and
+  acronyms from your own notes** (`SpeechVocabulary`) so it spells *Suresh*,
+  *PCH* or *Al Qersh* the way you do, and the transcript says which language it
+  was heard in — English (India) usually suits English mixed with Hindi or
+  Tamil. Quiet audio (a phone on a meeting table) is
   **brought up** to a level the recognizer accepts, up to 26 dB; a silent slice
   is skipped; and "No speech detected" on one slice is an empty slice, not a
   failed recording. That last one is what used to happen: every slice of a quiet
@@ -425,7 +434,10 @@ Voice capture is built for the long case, not just the ten-second reminder:
   **Speakers**, **Decisions** (*agreed*, *confirmed*, *approved*) and every line
   marked with who said it — *"Person 2: I'll send the revised drawings by
   Thursday"* — and anyone who did a real share of the talking is quoted at least
-  once. The summary is saved and searchable straight away; its follow-ups reach
+  once. Speech is tidied before lines are chosen: a run of *"okay, okay,
+  okay"* ends a remark, filler at the start goes, a name said three times is
+  said once, and a "will" about the past (*"10 years ago"*, *"yesterday"*) is
+  not a follow-up. The summary is saved and searchable straight away; its follow-ups reach
   Today only when you tap **Add its follow-ups to Today**.
 
 Any long memory can be summarized later, too: open it and the Summary section is

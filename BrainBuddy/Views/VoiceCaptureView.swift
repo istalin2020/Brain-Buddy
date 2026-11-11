@@ -228,6 +228,10 @@ struct VoiceCaptureView: View {
                 TranscriptText(text: item.text)
                     .font(.callout)
             }
+            // The one setting that most changes what comes back.
+            Text("Transcribed as \(SpeechTranscriber.transcriptionLanguageName). Mixing English with Hindi, Tamil or another language? Choose English (India) in Settings › Transcription — and turn on Higher accuracy for long meetings.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -405,7 +409,7 @@ struct VoiceCaptureView: View {
         isRetrying = true
         services.ingest.clearError()
         Task {
-            if await services.ingest.transcribeAgain(item) {
+            if await services.ingest.transcribeAgain(item, in: modelContext) {
                 await services.applyEdit(to: item, in: modelContext)
             }
             isRetrying = false

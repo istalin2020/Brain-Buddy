@@ -107,7 +107,7 @@ enum DiscussionSummarizer {
         // Commitments are claimed first, so an agreed action is never demoted to
         // a key point — and never printed twice under two headings.
         let followUpIndexes = pick(
-            from: sentences.indices.filter { isCommitment(sentences[$0]) },
+            from: sentences.indices.filter { isFollowUp(sentences[$0]) },
             scores: scores,
             limit: maxFollowUps,
             sentences: sentences
@@ -173,7 +173,7 @@ enum DiscussionSummarizer {
         }
 
         let followUpIndexes = pick(
-            from: sentences.indices.filter { isCommitment(sentences[$0]) },
+            from: sentences.indices.filter { isFollowUp(sentences[$0]) },
             scores: scores, limit: maxFollowUps, sentences: sentences
         )
         let afterFollowUps = sentences.indices.filter { !followUpIndexes.contains($0) }
@@ -342,7 +342,85 @@ enum DiscussionSummarizer {
     private static func usableSentences(in transcript: String) -> [String] {
         Tokenizer.sentences(in: transcript)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .flatMap(spokenClauses)
             .filter { wordCount(of: $0) >= 4 }
+    }
+
+    // MARK: - Speech, tidied
+
+    /// Words that carry no content of their own in conversation — "okay",
+    /// "yeah", "haan", "achha".
+    private static let interjections: Set<String> = [
+        "okay", "ok", "yes", "yeah", "yep", "yup", "hmm", "hm", "mm", "uh", "um", "umm",
+        "oh", "ah", "huh", "alright", "haan", "han", "achha", "acha", "accha", "ji", "theek"
+    ]
+
+    /// Phrases that only clear the throat at the start of a remark.
+    private static let openingFillers: [[String]] = [
+        ["no", "problem"], ["of", "course"], ["you", "know"], ["i", "mean"], ["sort", "of"]
+    ]
+
+    /// A spoken "sentence", tidied into the remarks it actually holds.
+    ///
+    /// Speech recognised without much punctuation runs remarks together:
+    /// *"…start by March April Okay, okay, okay Suresh, Suresh, Suresh Phir ki
+    /// alignment…"*. Quoting that whole is how a summary ends up longer than
+    /// the point it makes. So:
+    ///
+    /// - a run of two or more interjections ("Okay, okay, okay") ends a remark;
+    /// - interjections and throat-clearing at the start of a remark go;
+    /// - a word said several times in a row is said once ("Suresh, Suresh,
+    ///   Suresh" → "Suresh").
+    ///
+    /// The words that remain are the speaker's own, in their order —
+    /// nothing is added.
+    static func spokenClauses(_ sentence: String) -> [String] {
+        let tokens = sentence.split(whereSeparator: \.isWhitespace).map(String.init)
+        func plain(_ token: String) -> String {
+            token.lowercased().trimmingCharacters(in: .punctuationCharacters)
+        }
+
+        var clauses: [[String]] = []
+        var current: [String] = []
+        var index = 0
+        while index < tokens.count {
+            // A run of interjections.
+            var run = index
+            while run < tokens.count, interjections.contains(plain(tokens[run])) { run += 1 }
+            let length = run - index
+            if length >= 2 || (length == 1 && current.isEmpty) {
+                if length >= 2, !current.isEmpty {
+                    clauses.append(current)
+                    current = []
+                }
+                index = run
+                continue
+            }
+            if current.isEmpty, let filler = openingFillers.first(where: { phrase in
+                index + phrase.count <= tokens.count
+                    && zip(phrase, tokens[index...]).allSatisfy { $0 == plain($1) }
+            }) {
+                index += filler.count
+                continue
+            }
+
+            let token = tokens[index]
+            if let last = current.last, plain(last) == plain(token), !plain(token).isEmpty {
+                // Said again: keep one, with the later punctuation.
+                current[current.count - 1] = token
+            } else {
+                current.append(token)
+            }
+            index += 1
+        }
+        if !current.isEmpty { clauses.append(current) }
+
+        return clauses.map { words in
+            var text = words.joined(separator: " ")
+            while let last = text.last, ",;:".contains(last) { text.removeLast() }
+            guard let first = text.first, first.isLowercase else { return text }
+            return first.uppercased() + text.dropFirst()
+        }
     }
 
     /// Mean term weight rather than the sum, so one rambling sentence can't win
@@ -430,6 +508,27 @@ enum DiscussionSummarizer {
     static func isCommitment(_ sentence: String) -> Bool {
         let padded = " " + expandedForMatching(sentence) + " "
         return commitmentCues.contains { padded.contains($0) }
+    }
+
+    /// A commitment about what is still to come. "I will take that 10 years
+    /// ago" and "yesterday there was a meeting… highest priority" have the
+    /// words of a commitment and are about the past, so they are not
+    /// something to follow up.
+    static func isFollowUp(_ sentence: String) -> Bool {
+        isCommitment(sentence) && !talksAboutThePast(sentence)
+    }
+
+    private static let pastMarkers: [String] = [
+        " ago ", " yesterday ", " last week ", " last month ", " last year ",
+        " last time ", " earlier today ", " the other day "
+    ]
+
+    static func talksAboutThePast(_ sentence: String) -> Bool {
+        let padded = " " + expandedForMatching(sentence)
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ") + " "
+        return pastMarkers.contains { padded.contains($0) }
     }
 
     /// Phrases that mark something as settled in a discussion.

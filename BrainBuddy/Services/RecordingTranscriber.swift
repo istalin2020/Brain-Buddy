@@ -21,6 +21,16 @@ import Speech
 /// - **The same samples tell the voices apart** (`SpeakerFeatures`,
 ///   `SpeakerClustering`), using the word timings the recognizer reports.
 ///
+/// - **Every utterance is kept** (`PassCollector`). Apple's recognizer quietly
+///   starts a new utterance inside the same request after a pause, and its
+///   final result holds only the last one. Taking just that result is how a
+///   fourteen-minute meeting came back as 118 words — one sentence from each
+///   slice. Partial results are followed instead, and each utterance is banked
+///   as the next one begins.
+/// - **Slices are short** — about fourteen seconds, ending in a pause — so a
+///   request rarely spans more than a couple of utterances, and the timing of
+///   each is known closely even when the recognizer doesn't report it.
+///
 /// A recording made of several pieces — it was interrupted and carried on — is
 /// read as one continuous stream.
 enum RecordingTranscriber {
@@ -48,7 +58,7 @@ enum RecordingTranscriber {
 
     static let sampleRate = Double(SpeakerFeatures.sampleRate)
     /// Aim for slices this long…
-    static let sliceLength: TimeInterval = 45
+    static let sliceLength: TimeInterval = 14
     /// …ending in the quietest moment from this long before the aim…
     static let cutLookBack: TimeInterval = 8
     /// …to this long after it.
@@ -215,7 +225,9 @@ enum RecordingTranscriber {
         ) else { throw Failure.unreadable("no audio format") }
 
         let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = false
+        // Partial results are how the utterances before the last one are seen
+        // at all: see `PassCollector`.
+        request.shouldReportPartialResults = true
         configure(request)
 
         // Fed a second at a time, the way live audio arrives.
@@ -234,23 +246,32 @@ enum RecordingTranscriber {
         }
         request.endAudio()
 
-        let run = RecognitionRun()
+        let duration = Double(samples.count) / sampleRate
+        let run = RecognitionRun(duration: duration)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 run.begin(continuation)
                 run.task = recognizer.recognitionTask(with: request) { result, error in
-                    if let error {
-                        run.finish(.failure(error))
-                        return
+                    if let result {
+                        let transcription = result.bestTranscription
+                        run.receive(
+                            text: transcription.formattedString,
+                            words: RecordingTranscriber.words(in: transcription)
+                        )
+                        if result.isFinal {
+                            run.finishWithWords()
+                            return
+                        }
                     }
-                    guard let result, result.isFinal else { return }
-                    run.finish(.success(RecordingTranscriber.words(in: result.bestTranscription)))
+                    // An error after words were heard — often "no speech" for
+                    // the silence at the end — still keeps the words.
+                    if let error { run.finishWithWords(orFail: error) }
                 }
                 // A recognizer that never answers must not hang the note forever.
-                let limit = UInt64((Double(samples.count) / sampleRate * 2 + 60) * 1_000_000_000)
+                let limit = UInt64((duration * 2 + 60) * 1_000_000_000)
                 Task {
                     try? await Task.sleep(nanoseconds: limit)
-                    run.finish(.failure(Failure.unreadable("the recognizer took too long")))
+                    run.finishWithWords(orFail: Failure.unreadable("the recognizer took too long"))
                 }
             }
         } onCancel: {
@@ -278,13 +299,140 @@ enum RecordingTranscriber {
     }
 }
 
+/// Collects every utterance a recognition request reports.
+///
+/// The recognizer starts a new utterance inside the same request after a
+/// pause — no signal, no `isFinal`, just a transcript that suddenly reads as
+/// something else — and the final result carries only the last utterance.
+/// `SpeechTranscriber.continues` recognises the switch from the text, as live
+/// dictation does; the utterance that was running is banked then.
+///
+/// Timings are repaired as well (`words(duration:)`): an utterance may come
+/// with no timings, or with timings counted from its own start rather than
+/// the request's. Either way it is placed after the one before it, so the
+/// words stay in order and voices can still be measured.
+struct PassCollector {
+    typealias Word = SpeakerTranscript.Word
+
+    private(set) var passes: [[Word]] = []
+    private var current: [Word] = []
+    private var currentText = ""
+
+    mutating func receive(text: String, words: [Word]) {
+        if !SpeechTranscriber.continues(text, from: currentText), !Self.revises(text, currentText) {
+            bank()
+        }
+        current = words
+        currentText = text
+    }
+
+    /// The same utterance with its first word changed — "Sun drawings are
+    /// late" becoming "The drawings are late" — rather than a new one.
+    static func revises(_ incoming: String, _ previous: String) -> Bool {
+        let new = normalizedWords(incoming), old = normalizedWords(previous)
+        guard new.count >= 4, old.count >= 4 else { return false }
+        return Array(new.dropFirst().prefix(3)) == Array(old.dropFirst().prefix(3))
+    }
+
+    private static func normalizedWords(_ text: String) -> [String] {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+    }
+
+    mutating func bank() {
+        if !current.isEmpty { passes.append(current) }
+        current = []
+        currentText = ""
+    }
+
+    var isEmpty: Bool { passes.isEmpty && current.isEmpty }
+
+    /// Every word heard, in order, timed within `0...duration`.
+    func words(duration: TimeInterval) -> [Word] {
+        var all = passes
+        if !current.isEmpty { all.append(current) }
+
+        var result: [Word] = []
+        var index = 0
+        while index < all.count {
+            let pass = all[index]
+            let lastEnd = result.last?.end ?? 0
+            let isTimed = pass.contains { $0.end > 0 }
+
+            if isTimed {
+                var shift: TimeInterval = 0
+                if let first = pass.first, !result.isEmpty, first.start < lastEnd - 0.25 {
+                    // Counted from its own start: place it after the last one.
+                    shift = lastEnd + 0.3 - first.start
+                }
+                result += pass.map { Word(text: $0.text, start: $0.start + shift, end: $0.end + shift) }
+                index += 1
+                continue
+            }
+
+            // Untimed: share out the time until the next timed utterance, or
+            // the end of the slice, among this and any untimed ones after it.
+            var untimed: [[Word]] = []
+            while index < all.count, !all[index].contains(where: { $0.end > 0 }) {
+                untimed.append(all[index])
+                index += 1
+            }
+            let nextStart = index < all.count ? (all[index].first?.start ?? duration) : duration
+            let from = result.isEmpty ? 0 : lastEnd + 0.1
+            let until = max(from, min(duration, nextStart > from ? nextStart : duration))
+            let count = untimed.reduce(0) { $0 + $1.count }
+            let step = count > 0 ? (until - from) / Double(count) : 0
+            var at = from
+            for pass in untimed {
+                for word in pass {
+                    result.append(Word(text: word.text, start: at, end: at + step * 0.9))
+                    at += step
+                }
+            }
+        }
+        return result.map { word in
+            let start = min(max(0, word.start), duration)
+            return Word(text: word.text, start: start, end: min(max(start, word.end), duration))
+        }
+    }
+}
+
 /// One recognition request's outcome, delivered exactly once whichever of the
 /// recognizer, the time limit or cancellation gets there first.
 private final class RecognitionRun: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<[SpeakerTranscript.Word], Error>?
     private var isFinished = false
+    private var collector = PassCollector()
+    private let duration: TimeInterval
     var task: SFSpeechRecognitionTask?
+
+    init(duration: TimeInterval) {
+        self.duration = duration
+    }
+
+    func receive(text: String, words: [SpeakerTranscript.Word]) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isFinished else { return }
+        collector.receive(text: text, words: words)
+    }
+
+    /// Finishes with everything heard; with nothing heard, fails with `error`
+    /// (or returns no words when there is no error).
+    func finishWithWords(orFail error: Error? = nil) {
+        lock.lock()
+        let collected = collector.isEmpty ? nil : collector.words(duration: duration)
+        lock.unlock()
+        if let collected {
+            finish(.success(collected))
+        } else if let error {
+            finish(.failure(error))
+        } else {
+            finish(.success([]))
+        }
+    }
 
     func begin(_ continuation: CheckedContinuation<[SpeakerTranscript.Word], Error>) {
         lock.lock()
@@ -308,7 +456,8 @@ private final class RecognitionRun: @unchecked Sendable {
         let task = self.task
         lock.unlock()
 
-        if case .failure = result { task?.cancel() }
+        // Harmless after a final result; stops one that timed out.
+        task?.cancel()
         continuation?.resume(with: result)
     }
 }
