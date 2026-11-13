@@ -44,6 +44,11 @@ struct KindBadge: View {
     var body: some View {
         Label(kind.title, systemImage: kind.systemImage)
             .font(.caption2.weight(.medium))
+            // Never wraps and never shrinks. In a row where the title beside it
+            // wants every available point, a badge without these renders as a
+            // circle with one letter per line — which is what it did.
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: true)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(Color.accentColor.opacity(0.12), in: Capsule())
@@ -123,5 +128,20 @@ extension Date {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: self, relativeTo: Date())
+    }
+
+    /// The day something was filed, short enough for the right edge of a row.
+    ///
+    /// "3d ago" answers how fresh it is; this answers *when*, which is what you
+    /// need when you're looking for the note from the Tuesday meeting. The year
+    /// appears only when it isn't this one.
+    var filedDateDescription: String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(self) { return "Today" }
+        if calendar.isDateInYesterday(self) { return "Yesterday" }
+        if calendar.component(.year, from: self) == calendar.component(.year, from: Date()) {
+            return formatted(.dateTime.day().month(.abbreviated))
+        }
+        return formatted(.dateTime.day().month(.abbreviated).year())
     }
 }

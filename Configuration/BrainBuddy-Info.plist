@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Written out rather than generated from INFOPLIST_KEY_* build settings.
+
+  UIBackgroundModes has to be an array of strings; a build setting holding
+  "audio remote-notification" is a single scalar unless Xcode happens to know
+  the key is a list, and if it lands as a scalar iOS silently ignores it. The
+  symptom is precisely the bug this file fixes: recording stops the moment the
+  app leaves the screen, then appears to resume when you come back — because the
+  app was suspended, not recording. Something this invisible at build time, and
+  this central to recording a conversation, is worth spelling out by hand.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Brain Buddy</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+
+	<key>NSCameraUsageDescription</key>
+	<string>Brain Buddy uses the camera so you can capture photos and scan documents into your second brain.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Brain Buddy uses the microphone to record voice notes and to let you search by talking.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Brain Buddy reads photos you pick so it can extract their text and store them in your second brain.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Brain Buddy transcribes your voice notes and spoken searches so you can find them later.</string>
+
+	<!--
+	  `audio` is what lets a voice note keep recording once the app leaves the
+	  screen or the phone locks. Without it iOS suspends the process within
+	  seconds and the recording simply stops.
+	-->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>remote-notification</string>
+	</array>
+
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<!-- Empty dictionary: the modern launch screen, no storyboard. -->
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+</dict>
+</plist>
